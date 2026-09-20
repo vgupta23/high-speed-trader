@@ -132,9 +132,6 @@ otherwise the `CONFIG` value is used. See `README.md` for the full list.
 
 ## Known limitations / open questions
 
-- `place_buy` / `place_sell_all` assume `place_equity_order` accepts a
-  dollar amount for buys and a share quantity for sells — verify this
-  against the actual Robinhood MCP tool schema before trading live money.
 - The stop-loss compares against the broker-reported `average_buy_price`,
   not the price at the moment *this bot* entered — if you also trade the
   same symbol manually, its average cost basis (and therefore the stop)

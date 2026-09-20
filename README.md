@@ -220,13 +220,172 @@ Human-readable activity lines are appended to `~/.high_speed_trader.log`
 reads it back to decide anything, which keeps it consistent with "no state
 is stored."
 
+## Robinhood MCP tool reference
+
+The Robinhood MCP server (`https://agent.robinhood.com/mcp/trading`, added in
+Step 3) exposes ~90 tools as `mcp__<server_name>__<tool>` — everything from
+quotes to order placement to SEC filings. This bot only ever calls seven of
+them (marked **used by this bot** below); the rest are documented here for
+anyone extending it or poking around with `claude -p` directly, e.g.:
+
+```bash
+claude -p "Call get_equity_quotes for AAPL and print the JSON." \
+  --allowedTools "mcp__robinhood__get_equity_quotes" --dangerously-skip-permissions
+```
+
+Every write tool below (order placement/cancellation, watchlist/alert/scan
+mutations, exercises) places or changes something real — the MCP server's own
+tool descriptions say to confirm with the user before calling them in an
+interactive session; this bot's unattended use of `place_equity_order` is
+gated entirely by `CONFIG["enable_live_buys"]` (see Safety checklist below).
+
+<details>
+<summary><strong>Accounts &amp; portfolio</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_accounts` | Lists brokerage accounts, including which one is `agentic_allowed` (tradable by an agent). **Used by this bot** — Step 4 verification. |
+| `get_portfolio` | Portfolio market value by asset type, plus buying power. **Used by this bot** — cash snapshot every tick (`get_account_snapshot`). |
+</details>
+
+<details>
+<summary><strong>Equities — read</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_equity_positions` | Open equity positions: symbol, quantity, average cost, hold breakdown. **Used by this bot.** |
+| `get_equity_quotes` | Real-time quotes + last close for one or more symbols. **Used by this bot.** |
+| `get_equity_orders` | Order history/status by account, with filters (`state`, `symbol`, `created_at_gte`, `order_id`). |
+| `get_equity_tradability` | Per-session tradability + fractional eligibility for up to 10 symbols. **Used by this bot** — gate before every buy. |
+| `get_equity_fundamentals` | Valuation ratios, market cap, today's OHLCV, 52-week range, dividend schedule. |
+| `get_equity_historicals` | OHLCV bars over a time range (charting/backtesting). |
+| `get_equity_price_book` | Level 2 bid/ask depth snapshot (max 4 symbols). |
+| `get_equity_tax_lots` | Open tax lots for one symbol — cost basis, acquisition date, long/short-term. |
+| `get_equity_technical_indicators` | RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, etc. over a symbol's bars. |
+| `get_equity_analyst_ratings` | Analyst price targets and Buy/Hold/Sell breakdown. |
+| `get_equity_news` | Recent news articles for a ticker. |
+</details>
+
+<details>
+<summary><strong>Equities — orders</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `review_equity_order` | Simulates an order (no execution): returns quote + pre-trade alerts (buying power, PDT, halts). **Used by this bot** — always called before `place_equity_order` for buys. |
+| `place_equity_order` | Places a real order. `side` (buy/sell), `type` (market/limit/stop_market/stop_limit), and exactly one of `quantity` or `dollar_amount` (`dollar_amount` requires `type=market`). Supports `tax_lots` for specified-lot sells, `market_hours` (regular/extended/all_day), and a `ref_id` UUID for idempotent retries. **Used by this bot** — buys sized by dollar amount, stop-loss/close-out sells by share quantity, matching how `place_buy`/`place_sell_all` call it (confirmed against this schema — see `docs/design.md`). |
+| `cancel_equity_order` | Cancels an open order by `order_id`. |
+</details>
+
+<details>
+<summary><strong>Options</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_option_chains` | Expirations/contract set for an underlying. |
+| `get_option_instruments` | Lists option contracts, filterable by expiration/strike/type/state. |
+| `get_option_quotes` | Real-time quotes for option contracts by instrument UUID. |
+| `get_option_historicals` | OHLC bars for option contracts. |
+| `get_option_orders` | Options order history/status. |
+| `get_option_positions` | Open (or all) options positions. |
+| `review_option_order` / `place_option_order` | Simulate/place single- or multi-leg (spreads, condors, calendars, rolls) options orders. Requires `option_level_2`+ on the account. |
+| `cancel_option_order` | Cancels an open options order. |
+| `exercise_option` / `cancel_option_exercise` | Exercise a long option (irrevocable) or cancel a still-queued exercise request. |
+| `get_option_watchlist` / `add_option_to_watchlist` / `remove_option_from_watchlist` | Manage the dedicated single-leg options watchlist. |
+| `get_option_level_upgrade_info` | Returns the URL to apply for/raise options trading level. |
+
+This bot is equity-only and never calls any option tool — see
+[`SKILLS.md`](SKILLS.md).
+</details>
+
+<details>
+<summary><strong>Crypto</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_crypto_account_onboarding_info` | Link to open a crypto account. |
+| `get_crypto_orders` / `get_crypto_positions` | Crypto order history / open positions. |
+| `get_crypto_quotes` | Real-time bid/ask/mark + previous close for crypto pairs. |
+| `get_currency_pairs` | Catalog of supported crypto pairs and per-pair order constraints. |
+| `preview_crypto_order` / `place_crypto_order` | Simulate/place a crypto order (`market`/`limit`/`stop_loss`/`stop_limit`, `quantity` or `dollar_amount`, optional `tax_lots`). |
+| `cancel_crypto_order` | Cancels an open crypto order. |
+</details>
+
+<details>
+<summary><strong>Advanced (OCO) orders</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_advanced_orders` | Multi-leg contingency orders (OCO, OTO) with legs hydrated. |
+| `review_advanced_order` / `place_advanced_order` | Simulate/place a one-cancels-the-other equity order: a take-profit limit leg + a stop-loss leg, same symbol/side/quantity. |
+| `cancel_advanced_order` | Cancels an advanced order and all its legs. |
+</details>
+
+<details>
+<summary><strong>Watchlists &amp; search</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_watchlists` / `get_watchlist_items` | List the user's watchlists / an individual list's items. |
+| `create_watchlist` / `update_watchlist` | Create a custom watchlist / rename or restyle one. |
+| `add_to_watchlist` / `remove_from_watchlist` | Add or remove stocks, crypto pairs, or indexes (mutually exclusive per call). |
+| `follow_watchlist` / `unfollow_watchlist` | Follow/unfollow a Robinhood-curated list. |
+| `get_popular_watchlists` | Discover curated lists (e.g. "100 Most Popular", "Daily Movers"). |
+| `search` | Resolve a name/partial ticker to an instrument, crypto pair, or market index. |
+</details>
+
+<details>
+<summary><strong>Alerts</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_alerts` | List configured price/indicator alerts. |
+| `create_alert` / `update_alert` / `delete_alert` | Create, modify, or (with a confirm step) delete an alert. Conditions span price and indicator (SMA/EMA/VWAP/RSI/MACD/Bollinger) triggers. |
+| `get_alert_log` / `mark_alerts_read` | Read fired-alert history and mark events as read. |
+</details>
+
+<details>
+<summary><strong>Scanners</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_scans` | List saved scanners (screeners). |
+| `create_scan` | Create a scanner, optionally from a preset (`DAILY_GAINERS`, `DAILY_LOSERS`, `HIGH_OPTIONS_VOLUME_IV`, `UPCOMING_EARNINGS`) plus custom filters. |
+| `run_scan` | Execute a saved scan against live market data. |
+| `update_scan_config` / `update_scan_filters` | Change a scan's sort/columns, or replace its filters. |
+| `get_scanner_filter_specs` | Valid filter types/predicates for building scan filters. |
+</details>
+
+<details>
+<summary><strong>Research &amp; fundamentals</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_earnings_calendar` | Market-wide earnings schedule over a date window. |
+| `get_earnings_results` | Trailing/upcoming earnings (EPS estimate vs. actual) for one symbol. |
+| `get_financials` | Revenue, gross profit, net income, margin by fiscal period. |
+| `get_sec_filing_index` / `get_sec_filing` / `get_sec_filing_facts` / `get_sec_filing_facts_catalog` | Find, read, and extract structured facts from SEC filings (10-K/10-Q/8-K). |
+| `get_politician_trades` | Disclosed congressional trading activity (STOCK Act data, ranges not exact amounts). |
+</details>
+
+<details>
+<summary><strong>P&amp;L, indexes &amp; account upgrades</strong></summary>
+
+| Tool | What it does |
+|---|---|
+| `get_pnl_trade_history` | Chronological realized-P&L trade log (equities/options/crypto). |
+| `get_realized_pnl` | Bucketed realized gain/loss totals over a time window. |
+| `get_indexes` / `get_index_quotes` / `get_index_historicals` | Market index lookups, real-time values, and history (SPX, NDX, DJI, etc.). |
+| `get_limited_margin_upgrade_info` | Eligibility + link to upgrade a cash account to limited margin (trade unsettled funds, no leverage). |
+</details>
+
 ## Safety checklist before going live
 
 - [ ] Ran `--once --simulation` and read the log output end to end.
 - [ ] Ran `--loop --simulation` for at least one full session and confirmed
       the picks and stop-loss checks look reasonable.
-- [ ] Confirmed `place_equity_order`'s real signature in your Robinhood MCP
-      matches the dollar-buy / quantity-sell assumptions in `place_buy` /
-      `place_sell_all` (see `docs/design.md`'s Known Limitations).
+- [x] `place_equity_order`'s dollar-buy / quantity-sell assumptions in
+      `place_buy` / `place_sell_all` match its real MCP signature — confirmed
+      against the tool schema (see
+      [Robinhood MCP tool reference](#robinhood-mcp-tool-reference) above).
 - [ ] Started with a small `deploy_fraction` and a small account balance.
 - [ ] Only then set `CONFIG["enable_live_buys"] = True`.
