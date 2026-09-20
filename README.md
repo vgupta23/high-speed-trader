@@ -1,5 +1,7 @@
 # High-Speed Trader
 
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
+
 A stateless, high-speed, **equity-only** intraday trading bot for a Robinhood
 account. Every tick reads live broker state, applies a hard $0.50/share
 stop-loss, and lets an AI (Claude or OpenAI) pick what to buy next — nothing
