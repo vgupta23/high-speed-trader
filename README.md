@@ -14,68 +14,113 @@ and [`docs/design.md`](docs/design.md) for how it's built.
 > ticks. Not financial advice. Use money you can afford to lose, and start
 > tiny.
 
-## Clone
+## Setup, step by step
 
+<details>
+<summary><strong>Step 1 — Get Python</strong> (click to expand)</summary>
+
+**Windows**: install from [python.org](https://www.python.org/). On the
+first installer screen, tick "Add python.exe to PATH." Then open a **new**
+terminal:
+```bash
+python --version
+```
+**macOS**: `brew install python` or [python.org](https://www.python.org/).
+
+**Linux**: almost certainly already installed. `python3 --version`.
+
+You want **3.9 or newer** (this repo has been run on 3.11 — needed for
+`zoneinfo`).
+</details>
+
+<details>
+<summary><strong>Step 2 — Install the Claude Code CLI and log in</strong></summary>
+
+Follow [Anthropic's current install guide](https://docs.claude.com/claude-code)
+for Claude Code, then:
+```bash
+claude --version     # prints a version = installed
+claude               # run once, log in, then /exit
+claude -p "say hi"   # headless works = you're good
+```
+If `claude -p` says "Invalid API key," you have a stale `ANTHROPIC_API_KEY`
+environment variable overriding your login. Delete it, open a new terminal,
+log in with plain `claude`.
+
+Every broker call this bot makes (quotes, positions, cash, orders) goes
+through this CLI via a headless `claude -p` call, **regardless of which AI
+makes the entry pick** — this step is not optional even if you plan to use
+`pick_provider = "openai"`. See [AI model requirements](#ai-model-requirements)
+below for what kind of Claude access (subscription vs. API billing) that
+needs.
+</details>
+
+<details>
+<summary><strong>Step 3 — Add the Robinhood MCP and authorize it</strong> (one time)</summary>
+
+```bash
+claude mcp add -s user --transport sse robinhood https://agent.robinhood.com/mcp/trading
+```
+If it later shows "Failed to connect," it's usually the transport. Remove
+and re-add with the other one:
+```bash
+claude mcp remove -s user robinhood
+claude mcp add -s user --transport http robinhood https://agent.robinhood.com/mcp/trading
+```
+Then open interactive `claude`, run `/mcp`, select `robinhood`, and finish
+the login in your browser. Confirm:
+```bash
+claude mcp list      # robinhood should show connected
+```
+If you name the server anything other than `robinhood`, update
+`CONFIG["mcp_server"]` in `high_speed_trader.py` to match.
+</details>
+
+<details>
+<summary><strong>Step 4 — Prove it can reach your account</strong> (read-only, no orders)</summary>
+
+```bash
+claude -p "Call get_accounts and return only JSON listing each account_number and its agentic_allowed flag." --allowedTools "mcp__robinhood__get_accounts" --dangerously-skip-permissions
+```
+Write down the account number that shows `agentic_allowed: true`. That's
+the account the bot trades. If this returns your account, the whole
+pipeline works.
+
+This bot is **equity-only** (see [`SKILLS.md`](SKILLS.md)) — it never
+places an options order, so unlike an options-trading bot, you do **not**
+need options trading approval on the Robinhood account for this repo.
+</details>
+
+<details>
+<summary><strong>Step 5 — Clone this repo and install</strong></summary>
+
+Green Code button → Download ZIP → unzip. Or:
 ```bash
 git clone https://github.com/vgupta23/high-speed-trader.git
 cd high-speed-trader
+python -m pip install -r requirements.txt
 ```
+(The only dependency is `tzdata`, and only Windows actually needs it.)
+</details>
 
-## Prerequisites
+<details>
+<summary><strong>Step 6 — Configure secrets (.env)</strong></summary>
 
-1. **Python 3.9+** (uses `zoneinfo`; this repo has been run on 3.11).
-2. **[Claude Code CLI](https://docs.claude.com/claude-code)** installed and
-   logged in. Every broker call (quotes, positions, cash, orders) goes
-   through it via a headless `claude -p` call, **regardless of which AI
-   makes the pick** — this is not optional even if you plan to use
-   `pick_provider = "openai"`.
-3. **Robinhood MCP** connected in Claude Code — see [Connect the Robinhood
-   MCP server](#connect-the-robinhood-mcp-server) below.
-4. **AI model access** for the entry pick — see [AI model
-   requirements](#ai-model-requirements) below.
-5. (Optional) A Telegram bot token + chat ID in `.env`, if you want
-   trade/notify messages pushed to Telegram. Without them, `notify()` just
-   logs locally.
-
-## Connect the Robinhood MCP server
-
-The bot never talks to Robinhood directly — every quote, position, cash, and
-order call is a scoped Claude Code call restricted to one
-`mcp__robinhood__*` tool at a time (see `mcp_tools()` in
-`high_speed_trader.py`). Wiring that up is a one-time setup:
-
-1. Make sure you're logged in to Claude Code:
-   ```bash
-   claude login
-   ```
-2. Add and authorize the Robinhood agentic MCP server. If you already have
-   access to it (e.g. through a Claude Code connector/integration you've
-   enabled), run:
-   ```bash
-   claude mcp list
-   ```
-   and confirm a server literally named `robinhood` is listed. If it isn't
-   there yet, add it — the exact add command depends on how Robinhood's MCP
-   is distributed for your Claude Code version/account, so check current
-   options with:
-   ```bash
-   claude mcp add --help
-   ```
-   Adding it will walk you through authorizing Claude Code against your own
-   Robinhood account (an OAuth-style login/consent flow) — this is what
-   grants the agentic access this bot relies on. Do this in a session you
-   trust; it lets Claude Code place real trades on that account.
-3. Once connected, confirm the tools are visible:
-   ```bash
-   claude mcp list
-   ```
-   If you name the server anything other than `robinhood`, update
-   `CONFIG["mcp_server"]` in `high_speed_trader.py` to match.
-4. Ask Claude directly: `"list my robinhood accounts"`. Copy the account
-   number it returns into `.env` as `ROBINHOOD_ACCOUNT_NUMBER` (see
-   [Configure secrets](#configure-secrets-env) below). **Never commit a real
-   account number** — the script refuses to run until this is set to
-   something other than the placeholder.
+All account/API secrets are read from environment variables, which the
+script loads from a local `.env` file at startup (falling back to whatever
+the shell already has exported). `.env` is gitignored — it never gets
+committed.
+```bash
+cp .env.example .env
+# then edit .env and fill in:
+#   ROBINHOOD_ACCOUNT_NUMBER=...       (the account_number from Step 4)
+#   OPENAI_API_KEY=...                 (only if pick_provider = "openai")
+#   TELEGRAM_BOT_TOKEN=...             (optional)
+#   TELEGRAM_CHAT_ID=...               (optional)
+```
+**Never commit a real account number or key** — the script refuses to run
+while `ROBINHOOD_ACCOUNT_NUMBER` is left at its placeholder.
+</details>
 
 ## AI model requirements
 
@@ -94,35 +139,10 @@ Two separate things need AI access here, and they aren't the same:
     `.env`. Claude Code access is *still* required for the broker rail even
     in this mode.
 
-## Configure secrets (.env)
+## Configure the bot
 
-All account/API secrets are read from environment variables, which the
-script loads from a local `.env` file at startup (falling back to whatever
-the shell already has exported). `.env` is gitignored — it never gets
-committed.
-
-```bash
-cp .env.example .env
-# then edit .env and fill in:
-#   ROBINHOOD_ACCOUNT_NUMBER=...
-#   OPENAI_API_KEY=...          (only if pick_provider = "openai")
-#   TELEGRAM_BOT_TOKEN=...      (optional)
-#   TELEGRAM_CHAT_ID=...        (optional)
-```
-
-## Install
-
-```bash
-cd high-speed-trader
-pip install -r requirements.txt   # stdlib-only; this is a no-op on macOS/Linux
-```
-
-There is no virtualenv-only dependency beyond `tzdata` on Windows — see
-`requirements.txt` for why.
-
-## Configure
-
-Open `high_speed_trader.py` and edit the `CONFIG` dict near the top:
+Setup (above) gets secrets into `.env`. Everything else about *how* the bot
+trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 
 | Key | What it controls |
 |---|---|
