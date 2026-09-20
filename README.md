@@ -14,27 +14,85 @@ and [`docs/design.md`](docs/design.md) for how it's built.
 > ticks. Not financial advice. Use money you can afford to lose, and start
 > tiny.
 
+## Clone
+
+```bash
+git clone https://github.com/vgupta23/high-speed-trader.git
+cd high-speed-trader
+```
+
 ## Prerequisites
 
 1. **Python 3.9+** (uses `zoneinfo`; this repo has been run on 3.11).
 2. **[Claude Code CLI](https://docs.claude.com/claude-code)** installed and
    logged in. Every broker call (quotes, positions, cash, orders) goes
-   through it via a headless `claude -p` call, regardless of which AI makes
-   the pick.
-3. **Robinhood MCP** authorized in Claude Code:
-   ```bash
-   claude mcp list   # confirm a server named "robinhood" is present
-   ```
-   If it isn't, add and authorize it before continuing — ask Claude Code
-   "list my robinhood accounts" once it's set up, then put that account
-   number in `.env` (see below). **Never commit a real account number** —
-   the script refuses to run until this is set to something other than the
-   placeholder.
-4. (Optional) An OpenAI API key in `.env`, only if you set
-   `CONFIG["pick_provider"] = "openai"`.
+   through it via a headless `claude -p` call, **regardless of which AI
+   makes the pick** — this is not optional even if you plan to use
+   `pick_provider = "openai"`.
+3. **Robinhood MCP** connected in Claude Code — see [Connect the Robinhood
+   MCP server](#connect-the-robinhood-mcp-server) below.
+4. **AI model access** for the entry pick — see [AI model
+   requirements](#ai-model-requirements) below.
 5. (Optional) A Telegram bot token + chat ID in `.env`, if you want
    trade/notify messages pushed to Telegram. Without them, `notify()` just
    logs locally.
+
+## Connect the Robinhood MCP server
+
+The bot never talks to Robinhood directly — every quote, position, cash, and
+order call is a scoped Claude Code call restricted to one
+`mcp__robinhood__*` tool at a time (see `mcp_tools()` in
+`high_speed_trader.py`). Wiring that up is a one-time setup:
+
+1. Make sure you're logged in to Claude Code:
+   ```bash
+   claude login
+   ```
+2. Add and authorize the Robinhood agentic MCP server. If you already have
+   access to it (e.g. through a Claude Code connector/integration you've
+   enabled), run:
+   ```bash
+   claude mcp list
+   ```
+   and confirm a server literally named `robinhood` is listed. If it isn't
+   there yet, add it — the exact add command depends on how Robinhood's MCP
+   is distributed for your Claude Code version/account, so check current
+   options with:
+   ```bash
+   claude mcp add --help
+   ```
+   Adding it will walk you through authorizing Claude Code against your own
+   Robinhood account (an OAuth-style login/consent flow) — this is what
+   grants the agentic access this bot relies on. Do this in a session you
+   trust; it lets Claude Code place real trades on that account.
+3. Once connected, confirm the tools are visible:
+   ```bash
+   claude mcp list
+   ```
+   If you name the server anything other than `robinhood`, update
+   `CONFIG["mcp_server"]` in `high_speed_trader.py` to match.
+4. Ask Claude directly: `"list my robinhood accounts"`. Copy the account
+   number it returns into `.env` as `ROBINHOOD_ACCOUNT_NUMBER` (see
+   [Configure secrets](#configure-secrets-env) below). **Never commit a real
+   account number** — the script refuses to run until this is set to
+   something other than the placeholder.
+
+## AI model requirements
+
+Two separate things need AI access here, and they aren't the same:
+
+- **The broker rail always runs through Claude Code**, no matter what
+  `pick_provider` you choose (steps above). That means you need either a
+  **Claude subscription that Claude Code can use (Pro, Max, or Team)**, or
+  an **Anthropic Console API key with billing enabled** — some Claude usage
+  is unavoidable just to read quotes/positions and place orders.
+- **The entry pick** (which equity to buy) additionally depends on
+  `CONFIG["pick_provider"]`:
+  - `"claude"` (default) — uses that same Claude Code access, plus
+    `WebSearch` for fresh catalysts. No separate API key needed.
+  - `"openai"` — needs an `OPENAI_API_KEY` with available credits, set in
+    `.env`. Claude Code access is *still* required for the broker rail even
+    in this mode.
 
 ## Configure secrets (.env)
 
