@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Env vars / secrets (OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, etc.)
+.env
+.env.*
+!.env.example
+
+# Logs (activity trail only, never trading state -- see README)
+*.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

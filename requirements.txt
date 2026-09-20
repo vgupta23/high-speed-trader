@@ -1,0 +1,14 @@
+# high_speed_trader.py uses only the Python standard library (argparse,
+# datetime, json, os, platform, subprocess, sys, time, pathlib, zoneinfo).
+# The one gap is Windows, which ships no IANA timezone database for
+# zoneinfo to read -- tzdata supplies it there. On macOS/Linux this line
+# installs a harmless no-op-equivalent package; pip will skip it entirely
+# if your platform doesn't need it.
+tzdata; sys_platform == "win32"
+
+# Not a pip package, but required to actually run this bot:
+#   Claude Code CLI  -- https://docs.claude.com/claude-code (all broker calls,
+#                        and the default "claude" pick_provider, go through it)
+#   Robinhood MCP    -- authorized in Claude Code (`claude mcp add robinhood ...`
+#                        then `claude mcp list` to confirm)
+# See README.md for setup steps.
