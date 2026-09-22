@@ -13,7 +13,8 @@ runs.
      a value computed on a previous tick.
   2. Check every open position against the stop-loss rule below; exit
      immediately if it's tripped.
-  3. Scan the universe for new entries that meet the selection logic.
+  3. Scan the up and down universes for new entries that meet the selection
+     logic.
   4. Place any resulting orders.
   5. Sleep until the next tick.
 - **Unlimited trades**: there is no cap on how many trades happen in a
@@ -27,11 +28,20 @@ runs.
 
 ## Stock Selection Logic
 
-- Maintain a universe list as a starting guideline — a seed watchlist, not a
-  boundary.
-- The universe is a floor, not a ceiling: any liquid, actively-traded U.S.
-  equity may be traded if it satisfies the entry logic, even if it isn't on
-  the seed list.
+- Maintain two seed watchlists as starting guidelines, not boundaries:
+  - `up_universe` — momentum longs: names already trading up on the day.
+  - `down_universe` — dip-buy candidates: names trading down hard (more
+    than a configured drop threshold) that look like a bounce, not a name
+    still falling for a real reason.
+- Either universe is a floor, not a ceiling: any liquid, actively-traded
+  U.S. equity may be traded if it satisfies the entry logic, even if it
+  isn't on a seed list.
+- A single day's price move isn't enough: each candidate also carries its
+  trailing 5-day volume trend (mean volume over the last 5 trading days vs.
+  the 5 trading days before that) and On-Balance-Volume trend over the same
+  window, pulled from historicals rather than one day's number. A big
+  day-change on flat or falling 5-day volume reads as a one-day spike; a
+  rising 5-day volume trend with rising OBV reads as sustained interest.
 
 ## Instrument Scope
 

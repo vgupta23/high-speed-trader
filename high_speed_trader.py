@@ -9,9 +9,10 @@ account, built to the rules in SKILLS.md:
     its entry (average buy price). Take-profit is uncapped -- winners are
     never force-sold while ahead.
   - Stock/equity instrument only. No options.
-  - A seed universe is a guideline, not a boundary -- the AI may propose any
-    other liquid, actively-traded US equity, which is then verified with the
-    broker before it's ever bought.
+  - Two seed universes (up_universe for momentum longs, down_universe for
+    dip-buy bounces) are a guideline, not a boundary -- the AI may propose
+    any other liquid, actively-traded US equity, which is then verified with
+    the broker before it's ever bought.
   - Runs only during regular exchange hours, and flattens every open
     position shortly before the close (the loop that enforces the stop isn't
     watching once the session ends).
@@ -99,19 +100,39 @@ CONFIG = {
     # prompt. Leave empty for none.
     "extra_pick_guidance": "",
 
-    # ----- seed universe: a guideline, not a hard boundary. The AI may
-    # propose a name outside this list; it is verified with the broker
+    # ----- seed universes: a guideline, not a hard boundary. The AI may
+    # propose a name outside these lists; it is verified with the broker
     # before any order is placed. -----
-    "universe": [
-        "AHER", "DELL", "ALAB", "VRT", "MRVL",
+    #
+    # up_universe: momentum longs -- names trading up on the day.
+    "up_universe": [
+        "AHER", "APP", "ALAB", "VRT", "MRVL",
         "AXTI", "AAOI", "LITE", "COHR", "CRDO",
-        "PENG", "POET", "GLW", "APP", "BE",
-        "INTC", "CEG", "VST", "OUST", "RVII",
+        "PENG", "META", "GLW", "GOOGL", "BE",
+        "AMZN", "CEG", "VST", "OUST", "RVII",
         "ASTS", "VSAT", "RKLB", "GEV", "ISRG",
-        "SPCX", "LAES", "QNT", "MU", "SMTC",
+        "SPCX", "LRCX", "VICR", "MU", "SMTC",
     ],
-    # Minimum absolute day-change percent for a name to become a candidate.
-    "candidate_min_daychg": 1.0,
+    # down_universe: dip-buy candidates -- liquid names that can gap down
+    # hard on a bad print or broad sell-off and snap back just as fast.
+    # Defaults to the same liquid names as up_universe; edit independently
+    # if you want a different watchlist for the dip side.
+    "down_universe": [
+        "EOSE", "CIFR", "HUT", "WYFI", "MRVL",
+        "AXTI", "AAOI", "FORM", "AMD", "CRDO",
+        "PENG", "META", "GLW", "GOOGL", "AVGO",
+        "WULF", "CEG", "VST", "OUST", "RVII",
+        "ASTS", "VSAT", "RKLB", "GEV", "ISRG",
+        "SPCX", "LRCX", "VICR", "MU", "SMTC",
+        "FPS","LMND","CAT","LMT","RTX","PURR",
+        "MSFT","XYZ","ROK","SOLS"
+    ],
+    # Minimum day-change percent (up) for an up_universe name to become a
+    # momentum candidate.
+    "candidate_min_daychg": 0.5,
+    # Minimum absolute day-change percent (down) for a down_universe name to
+    # become a dip-buy candidate, e.g. 5.0 == down more than 5%.
+    "candidate_min_down_daychg": 5.0,
 
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
@@ -329,6 +350,45 @@ def get_quotes(symbols):
     return res, None
 
 
+def get_volume_momentum(symbols):
+    """Trailing 5-trading-day volume trend per symbol -- deliberately NOT a
+    single day's volume. Cross-checks two independent broker-rail sources so
+    the read isn't hostage to one noisy metric:
+      - get_equity_historicals: daily volume bars, used to compare the mean
+        of the most recent 5 trading days against the 5 trading days before
+        that (volume_momentum_pct).
+      - get_equity_technical_indicators (OBV): confirms whether cumulative
+        On-Balance-Volume is actually rising over that same window, since a
+        raw volume average can rise on heavy two-sided (not just buying)
+        activity.
+    Best-effort: callers should treat a failure here as missing enrichment
+    data, not a reason to abandon the scan."""
+    prompt = (
+        f"For these equity symbols: {', '.join(symbols)}, make BOTH calls: "
+        f"(1) get_equity_historicals with interval=day, bounds=regular, "
+        f"covering roughly the last 15 calendar days, to get daily volume "
+        f"bars; (2) get_equity_technical_indicators with type=obv, "
+        f"interval=day, covering that same range, to get On-Balance-Volume. "
+        f"For each symbol, using the historicals volume bars: take the most "
+        f"recent 5 trading days as the recent window and the 5 trading days "
+        f"immediately before that as the baseline window, then compute "
+        f"avg_volume_recent5 (mean volume, recent window), avg_volume_prior5 "
+        f"(mean volume, baseline window), and volume_momentum_pct = "
+        f"(avg_volume_recent5 - avg_volume_prior5) / avg_volume_prior5 * 100. "
+        f"Using the OBV series, report obv_trend as \"rising\" if the latest "
+        f"OBV value is clearly above its value from 5 trading days ago, "
+        f"\"falling\" if clearly below, else \"flat\". "
+        f"Reply with ONLY a JSON object mapping symbol to fields, no prose, "
+        f'shaped exactly like: {{"ABC": {{"volume_momentum_pct": 0.0, '
+        f'"obv_trend": "rising"}}}}.'
+    )
+    res = claude_json(prompt, allowed_tools=mcp_tools(
+        "get_equity_historicals", "get_equity_technical_indicators"))
+    if "error" in res:
+        return None, res["error"]
+    return res, None
+
+
 def is_tradable_equity(symbol):
     """Guard for names the AI proposes outside the seed universe -- confirm
     the broker actually recognizes and can trade this equity before any
@@ -387,8 +447,22 @@ def place_sell_all(symbol, quantity):
 # used for exits -- the stop-loss and close-out guard are deterministic.
 # ============================================================================
 def build_pick_prompt(candidates):
-    lines = [f"- {c['symbol']}: {c['day_change_pct']:+.2f}% on the day, last {c['last']:.2f}"
-              for c in candidates]
+    lines = []
+    for c in candidates:
+        line = (
+            f"- {c['symbol']}: {c['day_change_pct']:+.2f}% on the day, last {c['last']:.2f} "
+            + ("(momentum long -- trading up)" if c["direction"] == "up"
+               else "(dip-buy -- trading down hard, look for a bounce)")
+        )
+        vmp = c.get("volume_momentum_pct")
+        if vmp is not None:
+            line += f"; 5-day avg volume vs prior 5 days: {vmp:+.1f}%"
+            obv = c.get("obv_trend")
+            if obv:
+                line += f", OBV {obv}"
+        else:
+            line += "; 5-day volume trend unavailable"
+        lines.append(line)
 
     guidance = CONFIG.get("extra_pick_guidance", "").strip()
     guidance_block = f"\n\nAdditional standing instructions from the operator: {guidance}" if guidance else ""
@@ -396,13 +470,27 @@ def build_pick_prompt(candidates):
     return (
         "You are picking ONE equity to buy right now in a high-speed intraday "
         "trading loop. Instrument is always common stock/shares -- no options, "
-        "no derivatives. Here are today's movers from a seed watchlist (day "
-        "change percent and last price):\n"
+        "no derivatives. Here are today's movers from two seed watchlists (day "
+        "change percent and last price), plus each name's trailing 5-day volume "
+        "trend (mean volume over the last 5 trading days vs. the 5 trading days "
+        "before that) and its On-Balance-Volume trend over the same window -- "
+        "use these to judge sustained interest, not just today's single-day "
+        "move. A big day_change_pct on a flat or falling 5-day volume trend is "
+        "more likely a one-day spike than real continuation; a rising 5-day "
+        "volume trend with rising OBV backing the move is a stronger case. "
+        "Names marked \"momentum long\" are up "
+        "on the day and the case is continuation. Names marked \"dip-buy\" are "
+        "down hard (more than the configured drop threshold) and the case is a "
+        "reversal/bounce -- only take one of these if you see a real reason the "
+        "drop is overdone or already stabilizing (e.g. no fresh bad news, "
+        "support holding, drop is index/sector-wide rather than company-specific), "
+        "not just because it's cheaper now:\n"
         + "\n".join(lines)
-        + "\n\nThis watchlist is only a guideline, not a boundary: if you know of "
+        + "\n\nThese watchlists are only a guideline, not a boundary: if you know of "
         "a better, currently liquid and actively-traded US-listed equity opportunity "
-        "right now, you may pick that symbol instead, even if it's not listed above. "
-        "Avoid illiquid or halted names, and avoid anything reporting earnings today."
+        "right now (momentum or dip), you may pick that symbol instead, even if it's "
+        "not listed above. Avoid illiquid or halted names, and avoid anything "
+        "reporting earnings today."
         + guidance_block
         + "\nRate your conviction high, medium, or low, and pick the single best "
         "trade, or pass. Reply with ONLY a JSON object, no prose, shaped exactly "
@@ -509,9 +597,62 @@ def manage_positions(snapshot, approaching_close):
 
 
 # ============================================================================
+# Candidate scan -- shared by the live entry path and --simulation. Quotes
+# both seed universes and returns day movers tagged by direction:
+#   up_universe names trading up at least candidate_min_daychg (momentum
+#   longs) and down_universe names trading down more than
+#   candidate_min_down_daychg (dip-buy candidates -- a potential bounce).
+# ============================================================================
+def scan_candidates(direction=None):
+    """direction: None scans both universes (default); "up" or "down"
+    restricts the scan to just that side, e.g. for --up/--down."""
+    up_universe = list(dict.fromkeys(CONFIG["up_universe"])) if direction in (None, "up") else []
+    down_universe = list(dict.fromkeys(CONFIG["down_universe"])) if direction in (None, "down") else []
+    all_symbols = list(dict.fromkeys(up_universe + down_universe))
+    if not all_symbols:
+        return [], None
+
+    quotes, err = get_quotes(all_symbols)
+    if err:
+        return None, err
+
+    candidates = []
+    for sym in up_universe:
+        q = quotes.get(sym) or {}
+        dc, last = q.get("day_change_pct"), q.get("last")
+        if dc is None or last is None:
+            continue
+        if float(dc) >= CONFIG["candidate_min_daychg"]:
+            candidates.append({"symbol": sym, "day_change_pct": float(dc),
+                                "last": float(last), "direction": "up"})
+    for sym in down_universe:
+        q = quotes.get(sym) or {}
+        dc, last = q.get("day_change_pct"), q.get("last")
+        if dc is None or last is None:
+            continue
+        if float(dc) <= -CONFIG["candidate_min_down_daychg"]:
+            candidates.append({"symbol": sym, "day_change_pct": float(dc),
+                                "last": float(last), "direction": "down"})
+
+    candidates.sort(key=lambda c: abs(c["day_change_pct"]), reverse=True)
+
+    if candidates:
+        vol, err = get_volume_momentum([c["symbol"] for c in candidates])
+        if err:
+            log(f"scan: volume momentum lookup failed, continuing without it: {err}")
+            vol = {}
+        for c in candidates:
+            v = vol.get(c["symbol"]) or {}
+            c["volume_momentum_pct"] = v.get("volume_momentum_pct")
+            c["obv_trend"] = v.get("obv_trend")
+
+    return candidates, None
+
+
+# ============================================================================
 # Entry logic -- unlimited per SKILLS.md: attempted every tick, no daily cap.
 # ============================================================================
-def maybe_enter(snapshot):
+def maybe_enter(snapshot, direction=None):
     settled = snapshot["settled_cash"]
     if settled < CONFIG["min_trade_usd"]:
         log(f"entry: settled cash {settled:.2f} below min_trade_usd, skipping.")
@@ -519,28 +660,14 @@ def maybe_enter(snapshot):
 
     held_symbols = {p["symbol"] for p in snapshot["positions"]}
 
-    universe = list(dict.fromkeys(CONFIG["universe"]))
-    quotes, err = get_quotes(universe)
+    candidates, err = scan_candidates(direction)
     if err:
         log(f"entry: quotes failed: {err}")
         return
 
-    candidates = []
-    for sym in universe:
-        q = quotes.get(sym) or {}
-        dc = q.get("day_change_pct")
-        last = q.get("last")
-        if dc is None or last is None:
-            continue
-        if float(dc) < CONFIG["candidate_min_daychg"]:
-            continue
-        candidates.append({"symbol": sym, "day_change_pct": float(dc), "last": float(last)})
-
     if not candidates:
-        log("entry: no candidates clear the day-change floor.")
+        log("entry: no candidates clear the up/down day-change floors.")
         return
-
-    candidates.sort(key=lambda c: c["day_change_pct"], reverse=True)
 
     pick, err = pick_name(candidates)
     if err:
@@ -585,7 +712,7 @@ def maybe_enter(snapshot):
 # ============================================================================
 # One tick -- fully stateless. Every call re-reads live broker state.
 # ============================================================================
-def tick(simulation=False):
+def tick(simulation=False, direction=None):
     now = now_tz()
     if not in_session(now):
         log("Outside regular exchange hours. Idle.")
@@ -610,19 +737,11 @@ def tick(simulation=False):
         if not approaching_close:
             settled = snapshot["settled_cash"]
             if settled >= CONFIG["min_trade_usd"]:
-                universe = list(dict.fromkeys(CONFIG["universe"]))
-                quotes, qerr = get_quotes(universe)
-                if not qerr:
-                    candidates = [
-                        {"symbol": s, "day_change_pct": float(quotes[s]["day_change_pct"]), "last": float(quotes[s]["last"])}
-                        for s in universe
-                        if quotes.get(s) and quotes[s].get("day_change_pct") is not None
-                        and float(quotes[s]["day_change_pct"]) >= CONFIG["candidate_min_daychg"]
-                    ]
-                    if candidates:
-                        pick, perr = pick_name(candidates)
-                        if not perr:
-                            log(f"[SIMULATION] pick: {pick}")
+                candidates, qerr = scan_candidates(direction)
+                if not qerr and candidates:
+                    pick, perr = pick_name(candidates)
+                    if not perr:
+                        log(f"[SIMULATION] pick: {pick}")
         return
 
     if snapshot["positions"]:
@@ -632,7 +751,9 @@ def tick(simulation=False):
         log("Within close-out window; no new entries.")
         return
 
-    maybe_enter(snapshot)
+    maybe_enter(snapshot, direction)
+
+    return
 
 
 def main():
@@ -649,6 +770,11 @@ def main():
                      help="override CONFIG['session_close'], e.g. 16:00")
     ap.add_argument("--ignore-weekday", action="store_true",
                      help="testing only: treat weekends as in-session too")
+    scan_group = ap.add_mutually_exclusive_group()
+    scan_group.add_argument("--up", action="store_true",
+                             help="only scan up_universe (momentum longs); skip down_universe")
+    scan_group.add_argument("--down", action="store_true",
+                             help="only scan down_universe (dip-buy candidates); skip up_universe")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ACCOUNT_NUMBER_HERE":
@@ -667,19 +793,21 @@ def main():
     if args.ignore_weekday:
         CONFIG["ignore_weekday"] = True
 
+    direction = "up" if args.up else "down" if args.down else None
+
     log(f"provider={CONFIG['pick_provider']} enable_live_buys={CONFIG['enable_live_buys']} "
         f"simulation={args.simulation} interval={interval} "
         f"session={CONFIG['session_open']}-{CONFIG['session_close']} "
-        f"ignore_weekday={CONFIG['ignore_weekday']}")
+        f"ignore_weekday={CONFIG['ignore_weekday']} scan={direction or 'both'}")
 
     if args.once:
-        tick(simulation=args.simulation)
+        tick(simulation=args.simulation, direction=direction)
         return
 
     log("Starting loop. Ctrl+C to stop.")
     while True:
         try:
-            tick(simulation=args.simulation)
+            tick(simulation=args.simulation, direction=direction)
         except KeyboardInterrupt:
             log("Stopped.")
             break
