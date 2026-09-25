@@ -119,6 +119,9 @@ flowchart TD
   until this is deliberately flipped on.
 - `--simulation` runs the full read/decide path (including a real AI pick
   call) without calling `place_buy` or `place_sell_all`.
+- `--compare-providers` skips the account snapshot entirely: it scans,
+  sends the same candidates to each pick provider, and logs the picks.
+  It never reaches `place_buy` or `place_sell_all`.
 - `is_tradable_equity` rejects anything the broker doesn't recognize before
   a buy is attempted, which matters once the AI is free to propose names
   outside the seed universe.

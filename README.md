@@ -176,6 +176,10 @@ python3 high_speed_trader.py --loop --simulation
 # Only scan up_universe (momentum longs) or down_universe (dip-buy candidates)
 python3 high_speed_trader.py --once --simulation --up
 python3 high_speed_trader.py --once --simulation --down
+
+# Ask both claude and openai for a pick on the same scan and log whether
+# they agree. Read-only: ignores cash, places no orders.
+python3 high_speed_trader.py --compare-providers --up
 ```
 
 Once you've reviewed simulated output and flipped
@@ -202,6 +206,7 @@ python3 high_speed_trader.py --loop
 | `--ignore-weekday` | testing only: treat weekends as in-session | off |
 | `--up` | only scan `up_universe` (momentum longs); skip `down_universe` | off |
 | `--down` | only scan `down_universe` (dip-buy candidates); skip `up_universe` | off |
+| `--compare-providers` | one scan, picks from both `claude` and `openai`; no orders, no cash check (needs `OPENAI_API_KEY`) | off |
 
 `--up` and `--down` are mutually exclusive; omit both to scan both
 universes (the default). This only affects the entry scan — the stop-loss

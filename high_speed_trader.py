@@ -756,6 +756,49 @@ def tick(simulation=False, direction=None):
     return
 
 
+# ============================================================================
+# Provider comparison -- one scan, the same candidate list sent to every pick
+# provider. Read-only: no account snapshot, no cash gate, never places an
+# order. Useful for judging the pick step even with $0 settled cash.
+# ============================================================================
+def compare_providers(direction=None, providers=("claude", "openai")):
+    if not in_session(now_tz()):
+        log("compare: outside regular exchange hours; quotes may be stale.")
+
+    candidates, err = scan_candidates(direction)
+    if err:
+        log(f"compare: quotes failed: {err}")
+        return
+    if not candidates:
+        log("compare: no candidates clear the up/down day-change floors.")
+        return
+
+    log(f"compare: {len(candidates)} candidates: "
+        + ", ".join(f"{c['symbol']} {c['day_change_pct']:+.2f}%" for c in candidates))
+
+    original = CONFIG["pick_provider"]
+    picks = {}
+    try:
+        for provider in providers:
+            CONFIG["pick_provider"] = provider
+            pick, perr = pick_name(candidates)
+            picks[provider] = pick
+            log(f"compare: {provider}: {perr or json.dumps(pick)}")
+    finally:
+        CONFIG["pick_provider"] = original
+
+    chosen = {}
+    for provider, pick in picks.items():
+        if pick is None:
+            chosen[provider] = "error"
+        elif pick.get("decision") == "buy":
+            chosen[provider] = str(pick.get("symbol", "")).strip().upper()
+        else:
+            chosen[provider] = "pass"
+    verdict = "AGREE" if len(set(chosen.values())) == 1 else "DISAGREE"
+    log(f"compare: {verdict} -- " + ", ".join(f"{p}={s}" for p, s in chosen.items()))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Stateless high-speed equity trader (Robinhood MCP).")
     ap.add_argument("--once", action="store_true", help="run a single tick (for a scheduler)")
@@ -770,6 +813,9 @@ def main():
                      help="override CONFIG['session_close'], e.g. 16:00")
     ap.add_argument("--ignore-weekday", action="store_true",
                      help="testing only: treat weekends as in-session too")
+    ap.add_argument("--compare-providers", action="store_true",
+                     help="scan once and ask both claude and openai for a pick on the "
+                          "same candidates; read-only, ignores cash, places no orders")
     scan_group = ap.add_mutually_exclusive_group()
     scan_group.add_argument("--up", action="store_true",
                              help="only scan up_universe (momentum longs); skip down_universe")
@@ -780,6 +826,12 @@ def main():
     if CONFIG["account_number"] == "YOUR_ACCOUNT_NUMBER_HERE":
         sys.exit("Set CONFIG['account_number'] (or the ROBINHOOD_ACCOUNT_NUMBER "
                  "env var) to your real Robinhood account number first.")
+
+    if args.compare_providers:
+        direction = "up" if args.up else "down" if args.down else None
+        log(f"compare-providers scan={direction or 'both'}")
+        compare_providers(direction)
+        return
 
     if not args.once and not args.loop:
         ap.print_help()
