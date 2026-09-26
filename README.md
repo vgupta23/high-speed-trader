@@ -227,12 +227,15 @@ ever runs during the regular session.
    nothing is reused from a prior tick.
 3. Sell any position that's down $0.50/share from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
-4. Otherwise, quote both seed universes, filter to day-change movers
-   (`up_universe` names up at least `candidate_min_daychg`, `down_universe`
-   names down more than `candidate_min_down_daychg`), ask the configured AI
-   to pick one momentum long or dip-buy bounce (or pass), verify conviction
-   and tradability, and buy with `deploy_fraction` of settled cash if
-   `enable_live_buys` is on.
+4. Otherwise, quote both seed universes (or just one, with `--up`/`--down`),
+   filter to day-change movers (`up_universe` names up at least
+   `candidate_min_daychg` but no more than `candidate_max_daychg` — above
+   that it's treated as a one-day outlier and excluded; `down_universe`
+   names down more than `candidate_min_down_daychg`), enrich each candidate
+   with its trailing 5-day volume momentum and On-Balance-Volume trend, ask
+   the configured AI (`pick_provider`) to pick one momentum long or dip-buy
+   bounce (or pass), verify conviction and tradability, and buy with
+   `deploy_fraction` of settled cash if `enable_live_buys` is on.
 
 ## Logs
 
@@ -245,7 +248,7 @@ is stored."
 
 The Robinhood MCP server (`https://agent.robinhood.com/mcp/trading`, added in
 Step 3) exposes ~90 tools as `mcp__<server_name>__<tool>` — everything from
-quotes to order placement to SEC filings. This bot only ever calls seven of
+quotes to order placement to SEC filings. This bot only ever calls nine of
 them (marked **used by this bot** below); the rest are documented here for
 anyone extending it or poking around with `claude -p` directly, e.g.:
 
@@ -279,10 +282,10 @@ gated entirely by `CONFIG["enable_live_buys"]` (see Safety checklist below).
 | `get_equity_orders` | Order history/status by account, with filters (`state`, `symbol`, `created_at_gte`, `order_id`). |
 | `get_equity_tradability` | Per-session tradability + fractional eligibility for up to 10 symbols. **Used by this bot** — gate before every buy. |
 | `get_equity_fundamentals` | Valuation ratios, market cap, today's OHLCV, 52-week range, dividend schedule. |
-| `get_equity_historicals` | OHLCV bars over a time range (charting/backtesting). |
+| `get_equity_historicals` | OHLCV bars over a time range (charting/backtesting). **Used by this bot** — daily volume bars for the trailing 5-day volume momentum check (`get_volume_momentum`). |
 | `get_equity_price_book` | Level 2 bid/ask depth snapshot (max 4 symbols). |
 | `get_equity_tax_lots` | Open tax lots for one symbol — cost basis, acquisition date, long/short-term. |
-| `get_equity_technical_indicators` | RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, etc. over a symbol's bars. |
+| `get_equity_technical_indicators` | RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, etc. over a symbol's bars. **Used by this bot** — On-Balance-Volume (OBV) trend, cross-checking the volume momentum read (`get_volume_momentum`). |
 | `get_equity_analyst_ratings` | Analyst price targets and Buy/Hold/Sell breakdown. |
 | `get_equity_news` | Recent news articles for a ticker. |
 </details>

@@ -112,6 +112,7 @@ CONFIG = {
         "AMZN", "CEG", "VST", "OUST", "RVII",
         "ASTS", "VSAT", "RKLB", "GEV", "ISRG",
         "SPCX", "LRCX", "VICR", "MU", "SMTC",
+        "ZS","FORM","PANW",
     ],
     # down_universe: dip-buy candidates -- liquid names that can gap down
     # hard on a bad print or broad sell-off and snap back just as fast.
@@ -125,7 +126,8 @@ CONFIG = {
         "ASTS", "VSAT", "RKLB", "GEV", "ISRG",
         "SPCX", "LRCX", "VICR", "MU", "SMTC",
         "FPS","LMND","CAT","LMT","RTX","PURR",
-        "MSFT","XYZ","ROK","SOLS"
+        "MSFT","XYZ","ROK","SOLS","ZS","FORM",
+        "PANW",
     ],
     # Minimum day-change percent (up) for an up_universe name to become a
     # momentum candidate.

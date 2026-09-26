@@ -36,6 +36,11 @@ runs.
 - Either universe is a floor, not a ceiling: any liquid, actively-traded
   U.S. equity may be traded if it satisfies the entry logic, even if it
   isn't on a seed list.
+- A momentum-long candidate has a floor and a ceiling on its day change: it
+  must be up at least a configured minimum, but a move past a configured
+  maximum is treated as a one-day outlier (e.g. a halt or news-driven spike)
+  rather than real continuation, and is excluded from the pick step
+  entirely.
 - A single day's price move isn't enough: each candidate also carries its
   trailing 5-day volume trend (mean volume over the last 5 trading days vs.
   the 5 trading days before that) and On-Balance-Volume trend over the same
