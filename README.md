@@ -152,6 +152,7 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | `up_universe` | Seed watchlist for momentum longs (guideline, not a hard boundary) |
 | `down_universe` | Seed watchlist for dip-buy bounces (guideline, not a hard boundary) |
 | `candidate_min_daychg` | Minimum day-change % (up) for an `up_universe` name to become a candidate |
+| `candidate_max_daychg` | Maximum day-change % (up) for an `up_universe` name to still be considered -- above this it's excluded as a one-day outlier, default `10.0` |
 | `candidate_min_down_daychg` | Minimum abs(day-change %) down for a `down_universe` name to become a candidate, e.g. `5.0` == down more than 5% |
 | `deploy_fraction` | Fraction of settled cash to commit per new entry |
 | `min_trade_usd` | Skip an entry sized below this |

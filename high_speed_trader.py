@@ -133,6 +133,10 @@ CONFIG = {
     # Minimum absolute day-change percent (down) for a down_universe name to
     # become a dip-buy candidate, e.g. 5.0 == down more than 5%.
     "candidate_min_down_daychg": 5.0,
+    # Maximum day-change percent (up) for an up_universe name to still be
+    # considered -- names up more than this are excluded as one-day outliers
+    # (e.g. halt/news-driven spikes) rather than fed to the pick step.
+    "candidate_max_daychg": 10.0,
 
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
@@ -599,9 +603,11 @@ def manage_positions(snapshot, approaching_close):
 # ============================================================================
 # Candidate scan -- shared by the live entry path and --simulation. Quotes
 # both seed universes and returns day movers tagged by direction:
-#   up_universe names trading up at least candidate_min_daychg (momentum
-#   longs) and down_universe names trading down more than
-#   candidate_min_down_daychg (dip-buy candidates -- a potential bounce).
+#   up_universe names trading up at least candidate_min_daychg but no more
+#   than candidate_max_daychg (momentum longs -- above the max is treated as
+#   a one-day outlier, not a candidate) and down_universe names trading down
+#   more than candidate_min_down_daychg (dip-buy candidates -- a potential
+#   bounce).
 # ============================================================================
 def scan_candidates(direction=None):
     """direction: None scans both universes (default); "up" or "down"
@@ -622,8 +628,13 @@ def scan_candidates(direction=None):
         dc, last = q.get("day_change_pct"), q.get("last")
         if dc is None or last is None:
             continue
-        if float(dc) >= CONFIG["candidate_min_daychg"]:
-            candidates.append({"symbol": sym, "day_change_pct": float(dc),
+        dc = float(dc)
+        if dc > CONFIG["candidate_max_daychg"]:
+            log(f"scan: {sym} up {dc:+.2f}% exceeds candidate_max_daychg "
+                f"({CONFIG['candidate_max_daychg']:.1f}%), excluding as an outlier.")
+            continue
+        if dc >= CONFIG["candidate_min_daychg"]:
+            candidates.append({"symbol": sym, "day_change_pct": dc,
                                 "last": float(last), "direction": "up"})
     for sym in down_universe:
         q = quotes.get(sym) or {}
