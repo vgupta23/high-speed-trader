@@ -149,11 +149,10 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | `account_number` | Robinhood account the bot trades (or set `ROBINHOOD_ACCOUNT_NUMBER` env var) |
 | `mcp_server` | MCP server name, as shown by `claude mcp list` |
 | `pick_provider` | `"claude"` or `"openai"` — who picks the entry |
-| `up_universe` | Seed watchlist for momentum longs (guideline, not a hard boundary) |
-| `down_universe` | Seed watchlist for dip-buy bounces (guideline, not a hard boundary) |
-| `candidate_min_daychg` | Minimum day-change % (up) for an `up_universe` name to become a candidate |
-| `candidate_max_daychg` | Maximum day-change % (up) for an `up_universe` name to still be considered -- above this it's excluded as a one-day outlier, default `10.0` |
-| `candidate_min_down_daychg` | Minimum abs(day-change %) down for a `down_universe` name to become a candidate, e.g. `5.0` == down more than 5% |
+| `universe` | Single seed watchlist, checked for both momentum-long (bull) and dip-buy (bear) setups (guideline, not a hard boundary) |
+| `candidate_min_daychg` | Minimum day-change % (up) for a `universe` name to become a bull candidate |
+| `candidate_max_daychg` | Maximum day-change % (up) for a `universe` name to still be considered -- above this it's excluded as a one-day outlier, default `10.0` |
+| `candidate_min_down_daychg` | Minimum abs(day-change %) down for a `universe` name to become a bear candidate, e.g. `5.0` == down more than 5% |
 | `deploy_fraction` | Fraction of settled cash to commit per new entry |
 | `min_trade_usd` | Skip an entry sized below this |
 | `conviction_accept` | Which AI conviction levels clear the gate |
@@ -174,13 +173,10 @@ python3 high_speed_trader.py --once --simulation
 # Simulated loop, ticking every 15s (or CONFIG["tick_interval_sec"])
 python3 high_speed_trader.py --loop --simulation
 
-# Only scan up_universe (momentum longs) or down_universe (dip-buy candidates)
-python3 high_speed_trader.py --once --simulation --up
-python3 high_speed_trader.py --once --simulation --down
-
-# Ask both claude and openai for a pick on the same scan and log whether
-# they agree. Read-only: ignores cash, places no orders.
-python3 high_speed_trader.py --compare-providers --up
+# Ask both claude and openai for a bull-side and a bear-side pick on the
+# same scan and log whether they agree on each. Read-only: ignores cash,
+# places no orders.
+python3 high_speed_trader.py --compare-providers
 ```
 
 Once you've reviewed simulated output and flipped
@@ -205,13 +201,7 @@ python3 high_speed_trader.py --loop
 | `--session-open HH:MM` | `CONFIG["session_open"]` | `09:30` |
 | `--session-close HH:MM` | `CONFIG["session_close"]` | `16:00` |
 | `--ignore-weekday` | testing only: treat weekends as in-session | off |
-| `--up` | only scan `up_universe` (momentum longs); skip `down_universe` | off |
-| `--down` | only scan `down_universe` (dip-buy candidates); skip `up_universe` | off |
-| `--compare-providers` | one scan, picks from both `claude` and `openai`; no orders, no cash check (needs `OPENAI_API_KEY`) | off |
-
-`--up` and `--down` are mutually exclusive; omit both to scan both
-universes (the default). This only affects the entry scan — the stop-loss
-and close-out guard on existing positions always run regardless.
+| `--compare-providers` | one scan, bull-side and bear-side picks from both `claude` and `openai`; no orders, no cash check (needs `OPENAI_API_KEY`) | off |
 
 Every override flag follows the same rule: if you pass it on the command
 line, it wins; otherwise the value in `CONFIG` is used.
@@ -227,15 +217,17 @@ ever runs during the regular session.
    nothing is reused from a prior tick.
 3. Sell any position that's down $0.50/share from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
-4. Otherwise, quote both seed universes (or just one, with `--up`/`--down`),
-   filter to day-change movers (`up_universe` names up at least
-   `candidate_min_daychg` but no more than `candidate_max_daychg` — above
-   that it's treated as a one-day outlier and excluded; `down_universe`
-   names down more than `candidate_min_down_daychg`), enrich each candidate
-   with its trailing 5-day volume momentum and On-Balance-Volume trend, ask
-   the configured AI (`pick_provider`) to pick one momentum long or dip-buy
-   bounce (or pass), verify conviction and tradability, and buy with
-   `deploy_fraction` of settled cash if `enable_live_buys` is on.
+4. Otherwise, quote the seed universe and filter to day-change movers
+   (names up at least `candidate_min_daychg` but no more than
+   `candidate_max_daychg` — above that it's treated as a one-day outlier and
+   excluded; or names down more than `candidate_min_down_daychg`), tagging
+   each as `bull` or `bear`, enrich each candidate
+   with its trailing 5-day volume momentum and On-Balance-Volume trend plus a
+   deterministic longer-term bull/bear trend read (10-day EMA vs. 21-day EMA,
+   and price vs. the 50-day and 200-day SMA), ask the configured AI
+   (`pick_provider`) to pick one momentum long or dip-buy bounce (or pass),
+   verify conviction and tradability, and buy with `deploy_fraction` of
+   settled cash if `enable_live_buys` is on.
 
 ## Logs
 
@@ -285,7 +277,7 @@ gated entirely by `CONFIG["enable_live_buys"]` (see Safety checklist below).
 | `get_equity_historicals` | OHLCV bars over a time range (charting/backtesting). **Used by this bot** — daily volume bars for the trailing 5-day volume momentum check (`get_volume_momentum`). |
 | `get_equity_price_book` | Level 2 bid/ask depth snapshot (max 4 symbols). |
 | `get_equity_tax_lots` | Open tax lots for one symbol — cost basis, acquisition date, long/short-term. |
-| `get_equity_technical_indicators` | RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, etc. over a symbol's bars. **Used by this bot** — On-Balance-Volume (OBV) trend, cross-checking the volume momentum read (`get_volume_momentum`). |
+| `get_equity_technical_indicators` | RSI, MACD, Bollinger Bands, moving averages, ATR, VWAP, etc. over a symbol's bars. **Used by this bot** — On-Balance-Volume (OBV) trend, cross-checking the volume momentum read (`get_volume_momentum`); and 10/21-day EMA plus 50/200-day SMA for the deterministic bull/bear trend classification (`get_trend_signals`, `classify_trend`). |
 | `get_equity_analyst_ratings` | Analyst price targets and Buy/Hold/Sell breakdown. |
 | `get_equity_news` | Recent news articles for a ticker. |
 </details>

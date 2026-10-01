@@ -13,8 +13,7 @@ runs.
      a value computed on a previous tick.
   2. Check every open position against the stop-loss rule below; exit
      immediately if it's tripped.
-  3. Scan the up and down universes for new entries that meet the selection
-     logic.
+  3. Scan the universe for new entries that meet the selection logic.
   4. Place any resulting orders.
   5. Sleep until the next tick.
 - **Unlimited trades**: there is no cap on how many trades happen in a
@@ -28,14 +27,16 @@ runs.
 
 ## Stock Selection Logic
 
-- Maintain two seed watchlists as starting guidelines, not boundaries:
-  - `up_universe` — momentum longs: names already trading up on the day.
-  - `down_universe` — dip-buy candidates: names trading down hard (more
-    than a configured drop threshold) that look like a bounce, not a name
-    still falling for a real reason.
-- Either universe is a floor, not a ceiling: any liquid, actively-traded
-  U.S. equity may be traded if it satisfies the entry logic, even if it
-  isn't on a seed list.
+- Maintain a single seed watchlist (`universe`) as a starting guideline, not
+  a boundary. Every name in it is checked for both setups on each scan,
+  tagged `bull_or_bear`:
+  - `bull` — momentum longs: names already trading up on the day.
+  - `bear` — dip-buy candidates: names trading down hard (more than a
+    configured drop threshold) that look like a bounce, not a name still
+    falling for a real reason.
+- The universe is a floor, not a ceiling: any liquid, actively-traded U.S.
+  equity may be traded if it satisfies the entry logic, even if it isn't on
+  the seed list.
 - A momentum-long candidate has a floor and a ceiling on its day change: it
   must be up at least a configured minimum, but a move past a configured
   maximum is treated as a one-day outlier (e.g. a halt or news-driven spike)
@@ -47,6 +48,13 @@ runs.
   window, pulled from historicals rather than one day's number. A big
   day-change on flat or falling 5-day volume reads as a one-day spike; a
   rising 5-day volume trend with rising OBV reads as sustained interest.
+- Each candidate also carries a longer-term bull/bear trend read, classified
+  deterministically (not by the AI) from daily moving averages: bullish is
+  the 10-day EMA above the 21-day EMA with price holding both the 50-day and
+  200-day SMA; bearish is price having broken below all three levels;
+  anything else is neutral. A momentum long against a bearish trend, or a
+  dip-buy in one, should be weighted down hard -- it's more likely a
+  short-lived bounce or a falling knife than a real setup.
 
 ## Instrument Scope
 
