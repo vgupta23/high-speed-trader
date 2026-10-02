@@ -94,7 +94,8 @@ CONFIG = {
     "pick_provider": "openai",
     "claude_bin": "claude",
     "claude_model": "sonnet",   # applied only on calls that allow WebSearch
-    "openai_model": "gpt-5.6-luna",  # applied only on calls that allow WebSearch
+    # OPENAI_MODEL in .env overrides the default; used on every openai call.
+    "openai_model": os.environ.get("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
 
     # Your own standing instructions to the AI, appended to every pick
     # prompt. Leave empty for none.

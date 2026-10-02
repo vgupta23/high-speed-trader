@@ -115,6 +115,7 @@ cp .env.example .env
 # then edit .env and fill in:
 #   ROBINHOOD_ACCOUNT_NUMBER=...       (the account_number from Step 4)
 #   OPENAI_API_KEY=...                 (only if pick_provider = "openai")
+#   OPENAI_MODEL=...                   (optional; overrides the default openai_model)
 #   TELEGRAM_BOT_TOKEN=...             (optional)
 #   TELEGRAM_CHAT_ID=...               (optional)
 ```
