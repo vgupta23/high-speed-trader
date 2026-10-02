@@ -120,6 +120,7 @@ cp .env.example .env
 #   MCP_CLIENT_TIMEOUT_SEC=240          (headless MCP call timeout)
 #   OPENAI_API_KEY=...                 (only if pick_provider = "openai")
 #   OPENAI_MODEL=...                   (optional; overrides the default openai_model)
+#   CLAUDE_MODEL=...                   (optional; overrides the default claude_model)
 #   TELEGRAM_BOT_TOKEN=...             (optional)
 #   TELEGRAM_CHAT_ID=...               (optional)
 ```

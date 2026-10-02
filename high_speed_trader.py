@@ -46,6 +46,7 @@ import platform
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -95,9 +96,11 @@ CONFIG = {
     # "openai": uses the OpenAI chat completions API. Needs OPENAI_API_KEY
     #           set as an environment variable.
     "pick_provider": "openai",
-    "claude_model": "sonnet",   # applied only on calls that allow WebSearch
+    # CLAUDE_MODEL in .env overrides the default; applied only on calls
+    # that allow WebSearch (the pick step).
+    "claude_model": os.environ.get("CLAUDE_MODEL", "").strip() or "sonnet",
     # OPENAI_MODEL in .env overrides the default; used on every openai call.
-    "openai_model": os.environ.get("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
+    "openai_model": os.environ.get("OPENAI_MODEL", "").strip() or "gpt-6.1-sol",
 
     # Your own standing instructions to the AI, appended to every pick
     # prompt. Leave empty for none.
@@ -160,6 +163,11 @@ CONFIG = {
     "ignore_weekday": False,   # testing only -- override with --ignore-weekday
 
     "mcp_client_timeout_sec": int(os.environ.get("MCP_CLIENT_TIMEOUT_SEC", "240")),
+    # The indicator tool takes one symbol per call (4 calls per symbol), so
+    # the trend lookup is split into batches run as parallel claude calls --
+    # one call for the whole candidate list blows through the timeout.
+    "trend_batch_size": 8,
+    "trend_max_workers": 4,
     "http_timeout_sec": 90,
 }
 
@@ -401,8 +409,28 @@ def get_trend_signals(symbols):
     bullish, bearish, or neutral (see classify_trend). The AI only ever gets
     the raw numbers here; the bull/bear call itself is deterministic Python,
     same as the stop-loss.
+    Runs in batches of CONFIG["trend_batch_size"] symbols, in parallel, so a
+    single failed or slow batch only loses those symbols.
     Best-effort: callers should treat a failure here as missing enrichment
     data, not a reason to abandon the scan."""
+    size = max(1, CONFIG["trend_batch_size"])
+    batches = [symbols[k:k + size] for k in range(0, len(symbols), size)]
+    merged, errors = {}, []
+    with ThreadPoolExecutor(max_workers=CONFIG["trend_max_workers"]) as pool:
+        for batch, (res, err) in zip(batches, pool.map(_trend_signals_batch, batches)):
+            if err:
+                errors.append(f"{','.join(batch)}: {err}")
+            else:
+                merged.update(res)
+    if errors:
+        log(f"scan: trend signal batches failed: {'; '.join(errors)}")
+    if not merged and errors:
+        return None, errors[0]
+    return merged, None
+
+
+def _trend_signals_batch(symbols):
+    """One claude call for one batch of get_trend_signals."""
     prompt = (
         f"For these equity symbols: {', '.join(symbols)}, make FOUR "
         f"get_equity_technical_indicators calls per symbol -- interval=day, "
