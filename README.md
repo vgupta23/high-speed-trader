@@ -114,6 +114,10 @@ committed.
 cp .env.example .env
 # then edit .env and fill in:
 #   ROBINHOOD_ACCOUNT_NUMBER=...       (the account_number from Step 4)
+#   MCP_CLIENT=claude                  (currently the only supported MCP client)
+#   MCP_CLIENT_BIN=claude               (optional; path/name of Claude CLI)
+#   MCP_SERVER=robinhood                (MCP server name in Claude Code)
+#   MCP_CLIENT_TIMEOUT_SEC=240          (headless MCP call timeout)
 #   OPENAI_API_KEY=...                 (only if pick_provider = "openai")
 #   OPENAI_MODEL=...                   (optional; overrides the default openai_model)
 #   TELEGRAM_BOT_TOKEN=...             (optional)
@@ -132,6 +136,15 @@ Two separate things need AI access here, and they aren't the same:
   **Claude subscription that Claude Code can use (Pro, Max, or Team)**, or
   an **Anthropic Console API key with billing enabled** — some Claude usage
   is unavoidable just to read quotes/positions and place orders.
+  `MCP_CLIENT` currently accepts only `claude`; `MCP_CLIENT_BIN`,
+  `MCP_SERVER`, and `MCP_CLIENT_TIMEOUT_SEC` configure its executable, server
+  name, and call timeout. Other MCP-capable clients need a client-specific
+  adapter before this script can use them. For a future adapter, Gemini CLI
+  is a promising fit because its MCP support includes SSE and Streamable HTTP;
+  Codex CLI is another option when the server supports Streamable HTTP and
+  OAuth. Neither is a drop-in replacement for this script's Claude CLI
+  invocation. See the [Gemini CLI MCP guide](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md)
+  and [Codex MCP guide](https://developers.openai.com/codex/mcp/).
 - **The entry pick** (which equity to buy) additionally depends on
   `CONFIG["pick_provider"]`:
   - `"claude"` (default) — uses that same Claude Code access, plus
@@ -148,7 +161,9 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | Key | What it controls |
 |---|---|
 | `account_number` | Robinhood account the bot trades (or set `ROBINHOOD_ACCOUNT_NUMBER` env var) |
-| `mcp_server` | MCP server name, as shown by `claude mcp list` |
+| `MCP_CLIENT` / `MCP_CLIENT_BIN` | MCP bridge selection and executable; currently only `claude` is supported |
+| `MCP_SERVER` | MCP server name, as shown by `claude mcp list` |
+| `MCP_CLIENT_TIMEOUT_SEC` | Timeout for headless MCP client calls (default `240`) |
 | `pick_provider` | `"claude"` or `"openai"` — who picks the entry |
 | `universe` | Single seed watchlist, checked for both momentum-long (bull) and dip-buy (bear) setups (guideline, not a hard boundary) |
 | `candidate_min_daychg` | Minimum day-change % (up) for a `universe` name to become a bull candidate |

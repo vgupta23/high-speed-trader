@@ -78,9 +78,11 @@ flowchart TD
   component below it retains anything between calls — each tick is a fresh
   read-decide-act cycle.
 - **Broker rail**: every quote, position, cash, and order call is a scoped
-  `claude -p` headless call with `--allowedTools` restricted to a specific
+  Claude Code `-p` headless call with `--allowedTools` restricted to a specific
   `mcp__robinhood__*` tool (see `mcp_tools()`). This is the *only* path to
-  the account, regardless of `pick_provider` — it never changes.
+  the account, regardless of `pick_provider` — it never changes. `MCP_CLIENT`
+  defaults to `claude`; other clients are not yet supported because their
+  per-call tool allow-list and headless invocation interfaces differ.
 - **Pick brain**: `pick_name` routes to `pick_via_claude` (Claude Code CLI,
   `WebSearch` allowed, no MCP tools allowed) or `pick_via_openai` (raw HTTPS
   call to the OpenAI chat completions endpoint). Either path returns a

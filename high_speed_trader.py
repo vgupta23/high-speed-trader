@@ -83,8 +83,11 @@ CONFIG = {
     # own account number here -- never commit a real one.
     "account_number": os.environ.get("ROBINHOOD_ACCOUNT_NUMBER", "YOUR_ACCOUNT_NUMBER_HERE"),
 
-    # MCP server name exactly as it shows in `claude mcp list`.
-    "mcp_server": "robinhood",
+    # Broker MCP client. Claude Code CLI is currently the supported bridge.
+    "mcp_client": os.environ.get("MCP_CLIENT", "claude").strip().lower() or "claude",
+    "mcp_client_bin": os.environ.get("MCP_CLIENT_BIN", "claude").strip() or "claude",
+    # MCP server name exactly as it shows in the configured client.
+    "mcp_server": os.environ.get("MCP_SERVER", "robinhood").strip() or "robinhood",
 
     # ----- which AI proposes the entry pick -----
     # "claude": uses your Claude Code CLI. No API key. Can WebSearch for
@@ -92,7 +95,6 @@ CONFIG = {
     # "openai": uses the OpenAI chat completions API. Needs OPENAI_API_KEY
     #           set as an environment variable.
     "pick_provider": "openai",
-    "claude_bin": "claude",
     "claude_model": "sonnet",   # applied only on calls that allow WebSearch
     # OPENAI_MODEL in .env overrides the default; used on every openai call.
     "openai_model": os.environ.get("OPENAI_MODEL", "").strip() or "gpt-5.6-luna",
@@ -157,7 +159,7 @@ CONFIG = {
     "session_close": "16:00",
     "ignore_weekday": False,   # testing only -- override with --ignore-weekday
 
-    "claude_timeout_sec": 240,
+    "mcp_client_timeout_sec": int(os.environ.get("MCP_CLIENT_TIMEOUT_SEC", "240")),
     "http_timeout_sec": 90,
 }
 
@@ -222,15 +224,17 @@ def http_post(url, headers, payload, timeout):
 
 
 # ============================================================================
-# The Claude Code headless bridge. This is the ONLY broker rail (quotes,
-# account, equity orders) regardless of pick_provider, and is also the
-# default pick brain. Strict JSON only.
+# The configured MCP client bridge. Claude Code CLI is currently the only
+# supported bridge and is also the default pick brain. Strict JSON only.
 # ============================================================================
 def claude_cli(prompt, allowed_tools=None, timeout=None):
     """Run `claude -p` headless and return raw stdout text, or '' on failure."""
-    timeout = timeout or CONFIG["claude_timeout_sec"]
+    if CONFIG["mcp_client"] != "claude":
+        log(f"unsupported MCP_CLIENT '{CONFIG['mcp_client']}'; currently supported: claude")
+        return ""
+    timeout = timeout or CONFIG["mcp_client_timeout_sec"]
     prompt = f"For account {CONFIG['account_number']}, {prompt}"
-    args = [CONFIG["claude_bin"], "-p", prompt, "--dangerously-skip-permissions",
+    args = [CONFIG["mcp_client_bin"], "-p", prompt, "--dangerously-skip-permissions",
             "--output-format", "text"]
 
     tool_names = []
@@ -254,16 +258,16 @@ def claude_cli(prompt, allowed_tools=None, timeout=None):
     try:
         proc = subprocess.run(args, **run_kwargs)
     except subprocess.TimeoutExpired:
-        log("claude call timed out")
+        log("MCP client call timed out")
         return ""
     except FileNotFoundError:
-        log("claude binary not found on PATH")
+        log(f"MCP client executable not found: {CONFIG['mcp_client_bin']}")
         return ""
     except Exception as exc:
-        log(f"claude call failed: {exc}")
+        log(f"MCP client call failed: {exc}")
         return ""
     if proc.returncode != 0:
-        log(f"claude exited with code {proc.returncode}: {(proc.stderr or '').strip()[:500]}")
+        log(f"MCP client exited with code {proc.returncode}: {(proc.stderr or '').strip()[:500]}")
     return (proc.stdout or "").strip()
 
 
