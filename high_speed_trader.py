@@ -941,6 +941,9 @@ def main():
     ap.add_argument("--compare-providers", action="store_true",
                      help="scan once and ask both claude and openai for a bull-side and a "
                           "bear-side pick; read-only, ignores cash, places no orders")
+    ap.add_argument("--providers", type=str, default="claude,openai",
+                     help="comma-separated pick providers for --compare-providers "
+                          "(claude, openai); default: claude,openai")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ACCOUNT_NUMBER_HERE":
@@ -948,7 +951,12 @@ def main():
                  "env var) to your real Robinhood account number first.")
 
     if args.compare_providers:
-        compare_providers()
+        providers = tuple(dict.fromkeys(
+            p.strip().lower() for p in args.providers.split(",") if p.strip()))
+        unknown = [p for p in providers if p not in ("claude", "openai")]
+        if not providers or unknown:
+            sys.exit(f"--providers must list claude and/or openai, got '{args.providers}'.")
+        compare_providers(providers)
         return
 
     if not args.once and not args.loop:

@@ -194,6 +194,9 @@ python3 high_speed_trader.py --loop --simulation
 # same scan and log whether they agree on each. Read-only: ignores cash,
 # places no orders.
 python3 high_speed_trader.py --compare-providers
+
+# Same, but only one provider -- e.g. an OpenAI-only bull/bear recommendation
+python3 high_speed_trader.py --compare-providers --providers openai
 ```
 
 Once you've reviewed simulated output and flipped
@@ -219,6 +222,7 @@ python3 high_speed_trader.py --loop
 | `--session-close HH:MM` | `CONFIG["session_close"]` | `16:00` |
 | `--ignore-weekday` | testing only: treat weekends as in-session | off |
 | `--compare-providers` | one scan, bull-side and bear-side picks from both `claude` and `openai`; no orders, no cash check (needs `OPENAI_API_KEY`) | off |
+| `--providers LIST` | comma-separated pick providers for `--compare-providers` (`claude`, `openai`) | `claude,openai` |
 
 Every override flag follows the same rule: if you pass it on the command
 line, it wins; otherwise the value in `CONFIG` is used.
