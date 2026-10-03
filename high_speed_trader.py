@@ -134,7 +134,9 @@ CONFIG = {
     "candidate_max_daychg": 8.0,
 
     # ----- entry gates (deterministic, applied after the trend lookup) -----
-    # Price must be above the 200-day SMA.
+    # Price must be above the 200-day SMA, or between the 50-day and 200-day
+    # SMA (either order) -- e.g. a name pulled back under its 200-day SMA but
+    # still holding its 50-day SMA qualifies.
     # RSI(rsi_period) must be above rsi_min (not oversold) and at or below
     # rsi_max -- anything above rsi_max is overbought and rejected.
     "rsi_period": 14,
@@ -581,11 +583,16 @@ def daychg_gate(dc):
 def entry_gate(c):
     """Deterministic entry gates, never left to the AI. Returns None if the
     candidate passes, else a short rejection reason. Missing data rejects."""
-    price, sma200, rsi, fib = c["last"], c.get("sma200"), c.get("rsi"), c.get("fib")
+    price, sma50, sma200 = c["last"], c.get("sma50"), c.get("sma200")
+    rsi, fib = c.get("rsi"), c.get("fib")
     if sma200 is None:
         return "200-day SMA unavailable"
     if price <= sma200:
-        return f"price {price:.2f} not above 200sma {sma200:.2f}"
+        if sma50 is None:
+            return f"price {price:.2f} not above 200sma {sma200:.2f} and 50sma unavailable"
+        if price <= sma50:
+            return (f"price {price:.2f} not above 200sma {sma200:.2f} "
+                    f"nor between it and 50sma {sma50:.2f}")
     if rsi is None:
         return "RSI unavailable"
     if rsi <= CONFIG["rsi_min"]:
@@ -675,7 +682,7 @@ def build_pick_prompt(candidates):
         "dip-buy still in a bullish trend is a much safer pullback-to-support "
         "case. "
         "Every name listed has already passed hard filters: price above the "
-        "200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
+        "200-day SMA or between the 50-day and 200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
         "and price sitting in the 0.618-0.786 Fibonacci retracement zone of "
         "its last swing high/low -- a classic pullback-entry zone. "
         "Names marked \"momentum long\" are up "
