@@ -82,7 +82,7 @@ CONFIG = {
     # The agentic-enabled Robinhood account the bot trades. Ask Claude
     # "list my robinhood accounts" once the MCP is authorized, and put your
     # own account number here -- never commit a real one.
-    "account_number": os.environ.get("ROBINHOOD_ACCOUNT_NUMBER", "YOUR_ACCOUNT_NUMBER_HERE"),
+    "account_number": os.environ.get("ROBINHOOD_ACCOUNT_NUMBER", "YOUR_ROBINHOOD_ACCOUNT_NUMBER"),
 
     # Broker MCP client. Claude Code CLI is currently the supported bridge.
     "mcp_client": os.environ.get("MCP_CLIENT", "claude").strip().lower() or "claude",
@@ -1076,7 +1076,7 @@ def main():
                           "gates on them (any symbol, skips day-change floors); read-only")
     args = ap.parse_args()
 
-    if CONFIG["account_number"] == "YOUR_ACCOUNT_NUMBER_HERE":
+    if CONFIG["account_number"] == "YOUR_ROBINHOOD_ACCOUNT_NUMBER":
         sys.exit("Set CONFIG['account_number'] (or the ROBINHOOD_ACCOUNT_NUMBER "
                  "env var) to your real Robinhood account number first.")
 
