@@ -112,7 +112,7 @@ CONFIG = {
     #
     # universe: liquid, actively-traded names watched for BOTH momentum-long
     # (bull) and dip-buy (bear) setups -- every symbol is checked against
-    # both the up and down day-change floors each scan (see scan_candidates).
+    # the day-change window each scan (see scan_candidates).
     "universe": [
         "AAOI", "AHER", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
         "ASTS", "AVAV", "AVGO", "AXTI", "BE", "BKSY", "BOT", "CAT",
@@ -125,16 +125,13 @@ CONFIG = {
         "TREE", "TSLA", "UBER", "VELO", "VICR", "VPG", "VRT", "VSAT",
         "VST", "WULF", "WYFI", "XYZ", "ZS",
     ],
-    # Minimum day-change percent (up) for a universe name to become a
-    # momentum-long (bull) candidate.
-    "candidate_min_daychg": 0.5,
-    # Minimum absolute day-change percent (down) for a universe name to
-    # become a dip-buy (bear) candidate, e.g. 5.0 == down more than 5%.
-    "candidate_min_down_daychg": 5.0,
-    # Maximum day-change percent (up) for a universe name to still be
-    # considered -- names up more than this are excluded as one-day outliers
-    # (e.g. halt/news-driven spikes) rather than fed to the pick step.
-    "candidate_max_daychg": 10.0,
+    # Day-change window for a universe name to become a candidate: between
+    # candidate_min_daychg and candidate_max_daychg percent, inclusive. Up
+    # names are momentum-long (bull), down names are dip-buy (bear); names
+    # outside the window are excluded as one-day outliers (e.g. halt/news-
+    # driven moves) rather than fed to the pick step.
+    "candidate_min_daychg": -8.0,
+    "candidate_max_daychg": 8.0,
 
     # ----- entry gates (deterministic, applied after the trend lookup) -----
     # Price must be above the 200-day SMA.
@@ -572,6 +569,15 @@ def fib_retracement(price, swing_high, swing_high_date, swing_low, swing_low_dat
             "in_zone": lo_r <= ratio <= hi_r}
 
 
+def daychg_gate(dc):
+    """Returns None if day change dc (percent) is inside the candidate
+    window, else a short rejection reason."""
+    lo, hi = CONFIG["candidate_min_daychg"], CONFIG["candidate_max_daychg"]
+    if not lo <= dc <= hi:
+        return f"day change {dc:+.2f}% outside {lo:+.1f}%..{hi:+.1f}% window"
+    return None
+
+
 def entry_gate(c):
     """Deterministic entry gates, never left to the AI. Returns None if the
     candidate passes, else a short rejection reason. Missing data rejects."""
@@ -792,13 +798,10 @@ def manage_positions(snapshot, approaching_close):
 
 # ============================================================================
 # Candidate scan -- shared by the live entry path and --simulation. Quotes
-# the whole universe and returns day movers tagged bull_or_bear: names
-# trading up at least candidate_min_daychg but no more than
-# candidate_max_daychg (bull, momentum long -- above the max is treated as
-# a one-day outlier, not a candidate) and names trading down more than
-# candidate_min_down_daychg (bear, dip-buy -- a potential bounce). Each
-# name is checked against both floors, since there's a single shared
-# universe. Each surviving candidate is also tagged with its longer-term
+# the whole universe and returns names whose day change is within
+# candidate_min_daychg..candidate_max_daychg, tagged bull_or_bear: up names
+# are bull (momentum long), down names are bear (dip-buy -- a potential
+# bounce). Anything outside the window is treated as a one-day outlier. Each surviving candidate is also tagged with its longer-term
 # bull/bear trend (classify_trend): bullish means the 10-day EMA is above
 # the 21-day EMA and price is holding both the 50-day and 200-day SMA;
 # bearish means price has broken below all three levels.
@@ -819,16 +822,12 @@ def scan_candidates():
         if dc is None or last is None:
             continue
         dc = float(dc)
-        if dc >= CONFIG["candidate_min_daychg"]:
-            if dc > CONFIG["candidate_max_daychg"]:
-                log(f"scan: {sym} up {dc:+.2f}% exceeds candidate_max_daychg "
-                    f"({CONFIG['candidate_max_daychg']:.1f}%), excluding as an outlier.")
-                continue
-            candidates.append({"symbol": sym, "day_change_pct": dc,
-                                "last": float(last), "bull_or_bear": "bull"})
-        elif dc <= -CONFIG["candidate_min_down_daychg"]:
-            candidates.append({"symbol": sym, "day_change_pct": dc,
-                                "last": float(last), "bull_or_bear": "bear"})
+        reason = daychg_gate(dc)
+        if reason:
+            log(f"scan: {sym} {reason}, excluding as an outlier.")
+            continue
+        candidates.append({"symbol": sym, "day_change_pct": dc, "last": float(last),
+                            "bull_or_bear": "bull" if dc >= 0 else "bear"})
 
     candidates.sort(key=lambda c: abs(c["day_change_pct"]), reverse=True)
 
@@ -856,8 +855,8 @@ def scan_candidates():
 
 
 def check_signals(symbols):
-    """Read-only: run the trend/RSI/Fibonacci entry gates on the given
-    symbols, skipping the day-change floors, and log the verdict for each.
+    """Read-only: run the day-change window and the trend/RSI/Fibonacci entry
+    gates on the given symbols, and log the verdict for each.
     Places no orders and calls no pick provider."""
     quotes, err = get_quotes(symbols)
     if err:
@@ -877,10 +876,10 @@ def check_signals(symbols):
     for c in candidates:
         fib = c["fib"] or {}
         log(f"check: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
-            f"sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
+            f"sma50={c['sma50']} sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
             f"swing_high={c['swing_high']} swing_low={c['swing_low']} "
             f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})}")
-        reason = entry_gate(c)
+        reason = daychg_gate(c["day_change_pct"]) or entry_gate(c)
         log(f"check: {c['symbol']}: " + (f"REJECT -- {reason}" if reason else "PASS"))
 
 
@@ -901,7 +900,7 @@ def maybe_enter(snapshot):
         return
 
     if not candidates:
-        log("entry: no candidates clear the up/down day-change floors.")
+        log("entry: no candidates clear the day-change window.")
         return
 
     pick, err = pick_name(candidates)
@@ -999,7 +998,7 @@ def tick(simulation=False):
 # ============================================================================
 def _compare_side(label, candidates, providers):
     if not candidates:
-        log(f"compare[{label}]: no candidates clear the day-change floor.")
+        log(f"compare[{label}]: no candidates clear the day-change window.")
         return
 
     log(f"compare[{label}]: {len(candidates)} candidates: "
@@ -1037,7 +1036,7 @@ def compare_providers(providers=("claude", "openai")):
         log(f"compare: quotes failed: {err}")
         return
     if not candidates:
-        log("compare: no candidates clear the up/down day-change floors.")
+        log("compare: no candidates clear the day-change window.")
         return
 
     bulls = [c for c in candidates if c["bull_or_bear"] == "bull"]
@@ -1067,8 +1066,8 @@ def main():
                      help="comma-separated pick providers for --compare-providers "
                           "(claude, openai); default: claude,openai")
     ap.add_argument("--check-signals", type=str, default=None, metavar="SYMS",
-                     help="comma-separated symbols: run only the 200sma/RSI/Fibonacci entry "
-                          "gates on them (any symbol, skips day-change floors); read-only")
+                     help="comma-separated symbols: run only the day-change window and the "
+                          "200sma/RSI/Fibonacci entry gates on them (any symbol); read-only")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ROBINHOOD_ACCOUNT_NUMBER":

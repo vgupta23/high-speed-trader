@@ -167,9 +167,8 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | `MCP_CLIENT_TIMEOUT_SEC` | Timeout for headless MCP client calls (default `240`) |
 | `pick_provider` | `"claude"` or `"openai"` — who picks the entry |
 | `universe` | Single seed watchlist, checked for both momentum-long (bull) and dip-buy (bear) setups (guideline, not a hard boundary) |
-| `candidate_min_daychg` | Minimum day-change % (up) for a `universe` name to become a bull candidate |
-| `candidate_max_daychg` | Maximum day-change % (up) for a `universe` name to still be considered -- above this it's excluded as a one-day outlier, default `10.0` |
-| `candidate_min_down_daychg` | Minimum abs(day-change %) down for a `universe` name to become a bear candidate, e.g. `5.0` == down more than 5% |
+| `candidate_min_daychg` | Lower bound of the day-change % window for a `universe` name to become a candidate, default `-8.0` |
+| `candidate_max_daychg` | Upper bound of the day-change % window, default `8.0` -- up names are bull, down names are bear; outside the window is excluded as a one-day outlier |
 | `deploy_fraction` | Fraction of settled cash to commit per new entry |
 | `min_trade_usd` | Skip an entry sized below this |
 | `conviction_accept` | Which AI conviction levels clear the gate |
@@ -239,10 +238,9 @@ ever runs during the regular session.
 3. Sell any position that's down $0.50/share from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
 4. Otherwise, quote the seed universe and filter to day-change movers
-   (names up at least `candidate_min_daychg` but no more than
-   `candidate_max_daychg` — above that it's treated as a one-day outlier and
-   excluded; or names down more than `candidate_min_down_daychg`), tagging
-   each as `bull` or `bear`, enrich each candidate
+   (names whose day change is between `candidate_min_daychg` and
+   `candidate_max_daychg` — outside that it's treated as a one-day outlier and
+   excluded), tagging each as `bull` (up) or `bear` (down), enrich each candidate
    with its trailing 5-day volume momentum and On-Balance-Volume trend plus a
    deterministic longer-term bull/bear trend read (10-day EMA vs. 21-day EMA,
    and price vs. the 50-day and 200-day SMA), ask the configured AI

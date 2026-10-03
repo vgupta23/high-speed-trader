@@ -110,7 +110,7 @@ flowchart TD
    if `approaching_close`, or if `entry - current >= stop_loss_usd`.
    Otherwise hold; upside is never capped here.
 6. If not approaching close: `maybe_enter(snapshot)` — quote the seed
-   universe, filter by `candidate_min_daychg`, hand the shortlist to
+   universe, filter to the `candidate_min_daychg`..`candidate_max_daychg` window, hand the shortlist to
    `pick_name`, gate on conviction, verify tradability, size the trade as
    `settled_cash * deploy_fraction`, and buy if `enable_live_buys` is `True`.
 
