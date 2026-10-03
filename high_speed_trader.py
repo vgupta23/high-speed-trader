@@ -114,21 +114,16 @@ CONFIG = {
     # (bull) and dip-buy (bear) setups -- every symbol is checked against
     # both the up and down day-change floors each scan (see scan_candidates).
     "universe": [
-        "AHER", "APP", "ALAB", "VRT", "MRVL",
-        "AXTI", "AAOI", "LITE", "COHR", "CRDO",
-        "PENG", "META", "GLW", "GOOGL", "BE",
-        "AMZN", "CEG", "VST", "OUST", "RVII",
-        "ASTS", "VSAT", "RKLB", "GEV", "ISRG",
-        "SPCX", "LRCX", "VICR", "MU", "SMTC",
-        "ZS", "FORM", "PANW", "IREN", "NVDA",
-        "AMD", "AVAV", "LMND", "PGY", "TREE",
-        "OKLO", "UBER", "SMCI", "QNT", "ON",
-        "RGTI", "APLD", "AMAT", "MSFT", "TSLA",
-        "SOLS", "LMT", "ROK", "CAT", "INTC",
-        "FPS", "BOT", "VPG", "FLY", "BKSY",
-        "VELO", "EOSE", "CIFR", "HUT", "WYFI",
-        "AVGO", "WULF", "RTX", "PURR", "XYZ",
-        "SOFI","KLAR","MDB","NVTS","MOD",
+        "AAOI", "AHER", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
+        "ASTS", "AVAV", "AVGO", "AXTI", "BE", "BKSY", "BOT", "CAT",
+        "CEG", "CIFR", "COHR", "CRDO", "DRO", "EOSE", "FLY", "FORM",
+        "FPS", "GEV", "GLW", "GOOGL", "HUT", "INTC", "IONQ", "IREN",
+        "ISRG", "KLAR", "LITE", "LMND", "LMT", "LRCX", "MDB", "META",
+        "MOD", "MRVL", "MSFT", "MU", "NVDA", "NVTS", "OKLO", "ON",
+        "OUST", "PANW", "PENG", "PGY", "PURR", "QNT", "RGTI", "RKLB",
+        "ROK", "RTX", "RVII", "SMCI", "SMTC", "SOFI", "SOLS", "SPCX",
+        "TREE", "TSLA", "UBER", "VELO", "VICR", "VPG", "VRT", "VSAT",
+        "VST", "WULF", "WYFI", "XYZ", "ZS",
     ],
     # Minimum day-change percent (up) for a universe name to become a
     # momentum-long (bull) candidate.
