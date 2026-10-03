@@ -141,6 +141,20 @@ CONFIG = {
     # (e.g. halt/news-driven spikes) rather than fed to the pick step.
     "candidate_max_daychg": 10.0,
 
+    # ----- entry gates (deterministic, applied after the trend lookup) -----
+    # Price must be above the 200-day SMA.
+    # RSI(rsi_period) must be above rsi_min (not oversold) and at or below
+    # rsi_max -- anything above rsi_max is overbought and rejected.
+    "rsi_period": 14,
+    "rsi_min": 30.0,
+    "rsi_max": 70.0,
+    # Price must sit in the fib_zone retracement band of the last swing
+    # (highest high / lowest low over fib_lookback_days calendar days).
+    # Upswing (low came first): retracement measured down from the high.
+    # Downswing (high came first): retracement measured up from the low.
+    "fib_lookback_days": 90,
+    "fib_zone": (0.618, 0.786),
+
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
     "min_trade_usd": 25.0,          # skip an entry too small to matter
@@ -431,18 +445,28 @@ def get_trend_signals(symbols):
 
 def _trend_signals_batch(symbols):
     """One claude call for one batch of get_trend_signals."""
+    lookback = CONFIG["fib_lookback_days"]
     prompt = (
-        f"For these equity symbols: {', '.join(symbols)}, make FOUR "
+        f"For these equity symbols: {', '.join(symbols)}, make FIVE "
         f"get_equity_technical_indicators calls per symbol -- interval=day, "
         f"bounds=regular, output=latest, start_time roughly 400 calendar days "
         f"before now (so the 200-day SMA has enough bars): (1) type=ema "
         f"period=10, (2) type=ema period=21, (3) type=sma period=50, (4) "
-        f"type=sma period=200. For each symbol report the latest value of "
-        f"each. Reply with ONLY a JSON object mapping symbol to fields, no "
-        f'prose, shaped exactly like: {{"ABC": {{"ema10": 0.0, "ema21": 0.0, '
-        f'"sma50": 0.0, "sma200": 0.0}}}}.'
+        f"type=sma period=200, (5) type=rsi period={CONFIG['rsi_period']}. "
+        f"For each symbol report the latest value of each. ALSO make one "
+        f"get_equity_historicals call for all of the symbols with "
+        f"interval=day, bounds=regular, start_time {lookback} calendar days "
+        f"before now, and for each symbol report swing_high (the highest bar "
+        f"high in that range) with swing_high_date (YYYY-MM-DD of that bar), "
+        f"and swing_low (the lowest bar low in that range) with "
+        f"swing_low_date. Reply with ONLY a JSON object mapping symbol to "
+        f'fields, no prose, shaped exactly like: {{"ABC": {{"ema10": 0.0, '
+        f'"ema21": 0.0, "sma50": 0.0, "sma200": 0.0, "rsi": 0.0, '
+        f'"swing_high": 0.0, "swing_high_date": "2026-01-01", '
+        f'"swing_low": 0.0, "swing_low_date": "2026-01-01"}}}}.'
     )
-    res = claude_json(prompt, allowed_tools=mcp_tools("get_equity_technical_indicators"))
+    res = claude_json(prompt, allowed_tools=mcp_tools(
+        "get_equity_technical_indicators", "get_equity_historicals"))
     if "error" in res:
         return None, res["error"]
     return res, None
@@ -526,6 +550,72 @@ def place_sell_all(symbol, quantity):
 # The single AI judgment for entries: pick one name to buy, or pass. Never
 # used for exits -- the stop-loss and close-out guard are deterministic.
 # ============================================================================
+def fib_retracement(price, swing_high, swing_high_date, swing_low, swing_low_date):
+    """Where price sits in the last swing, as a Fibonacci retracement ratio.
+      - upswing (low printed before the high): ratio = (high - price) / range,
+        i.e. how far price has pulled back down from the high.
+      - downswing (high printed before the low): ratio = (price - low) / range,
+        i.e. how far price has bounced back up from the low.
+    Returns {"swing": "up"|"down", "ratio", "zone_low", "zone_high",
+    "in_zone"} where zone_low/zone_high are the prices bounding
+    CONFIG["fib_zone"], or None if any input is missing or the range is flat."""
+    if None in (price, swing_high, swing_low) or not swing_high_date or not swing_low_date:
+        return None
+    rng = swing_high - swing_low
+    if rng <= 0:
+        return None
+    lo_r, hi_r = CONFIG["fib_zone"]
+    if str(swing_low_date) <= str(swing_high_date):
+        swing = "up"
+        ratio = (swing_high - price) / rng
+        a, b = swing_high - hi_r * rng, swing_high - lo_r * rng
+    else:
+        swing = "down"
+        ratio = (price - swing_low) / rng
+        a, b = swing_low + lo_r * rng, swing_low + hi_r * rng
+    return {"swing": swing, "ratio": ratio, "zone_low": a, "zone_high": b,
+            "in_zone": lo_r <= ratio <= hi_r}
+
+
+def entry_gate(c):
+    """Deterministic entry gates, never left to the AI. Returns None if the
+    candidate passes, else a short rejection reason. Missing data rejects."""
+    price, sma200, rsi, fib = c["last"], c.get("sma200"), c.get("rsi"), c.get("fib")
+    if sma200 is None:
+        return "200-day SMA unavailable"
+    if price <= sma200:
+        return f"price {price:.2f} not above 200sma {sma200:.2f}"
+    if rsi is None:
+        return "RSI unavailable"
+    if rsi <= CONFIG["rsi_min"]:
+        return f"RSI {rsi:.1f} not above {CONFIG['rsi_min']:.0f}"
+    if rsi > CONFIG["rsi_max"]:
+        return f"RSI {rsi:.1f} overbought (> {CONFIG['rsi_max']:.0f})"
+    if fib is None:
+        return "swing high/low unavailable"
+    if not fib["in_zone"]:
+        lo_r, hi_r = CONFIG["fib_zone"]
+        return (f"price {price:.2f} at {fib['ratio']:.3f} retracement of {fib['swing']}swing, "
+                f"outside {lo_r}-{hi_r} zone ({fib['zone_low']:.2f}-{fib['zone_high']:.2f})")
+    return None
+
+
+def enrich_with_signals(candidates):
+    """Attach trend/RSI/Fibonacci signals to each candidate in place."""
+    trend_signals, err = get_trend_signals([c["symbol"] for c in candidates])
+    if err:
+        log(f"scan: trend signal lookup failed: {err}")
+        trend_signals = {}
+    for c in candidates:
+        t = trend_signals.get(c["symbol"]) or {}
+        for k in ("ema10", "ema21", "sma50", "sma200", "rsi", "swing_high", "swing_low"):
+            v = t.get(k)
+            c[k] = float(v) if v is not None else None
+        c["trend"] = classify_trend(c["last"], c["ema10"], c["ema21"], c["sma50"], c["sma200"])
+        c["fib"] = fib_retracement(c["last"], c["swing_high"], t.get("swing_high_date"),
+                                   c["swing_low"], t.get("swing_low_date"))
+
+
 def build_pick_prompt(candidates):
     lines = []
     for c in candidates:
@@ -550,6 +640,12 @@ def build_pick_prompt(candidates):
                       f"/ 200sma {c['sma200']:.2f})")
         else:
             line += "; longer-term trend unavailable"
+        if c.get("rsi") is not None:
+            line += f"; RSI{CONFIG['rsi_period']} {c['rsi']:.1f}"
+        fib = c.get("fib")
+        if fib:
+            line += (f"; at {fib['ratio']:.3f} Fibonacci retracement of the last "
+                     f"{fib['swing']}swing (high {c['swing_high']:.2f}, low {c['swing_low']:.2f})")
         lines.append(line)
 
     guidance = CONFIG.get("extra_pick_guidance", "").strip()
@@ -577,6 +673,10 @@ def build_pick_prompt(candidates):
         "trend (e.g. an index-wide selloff, not company-specific news); a "
         "dip-buy still in a bullish trend is a much safer pullback-to-support "
         "case. "
+        "Every name listed has already passed hard filters: price above the "
+        "200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
+        "and price sitting in the 0.618-0.786 Fibonacci retracement zone of "
+        "its last swing high/low -- a classic pullback-entry zone. "
         "Names marked \"momentum long\" are up "
         "on the day and the case is continuation. Names marked \"dip-buy\" are "
         "down hard (more than the configured drop threshold) and the case is a "
@@ -747,19 +847,46 @@ def scan_candidates():
             c["volume_momentum_pct"] = v.get("volume_momentum_pct")
             c["obv_trend"] = v.get("obv_trend")
 
-        trend_signals, err = get_trend_signals([c["symbol"] for c in candidates])
-        if err:
-            log(f"scan: trend signal lookup failed, continuing without it: {err}")
-            trend_signals = {}
+        enrich_with_signals(candidates)
+        passed = []
         for c in candidates:
-            t = trend_signals.get(c["symbol"]) or {}
-            c["ema10"] = t.get("ema10")
-            c["ema21"] = t.get("ema21")
-            c["sma50"] = t.get("sma50")
-            c["sma200"] = t.get("sma200")
-            c["trend"] = classify_trend(c["last"], c["ema10"], c["ema21"], c["sma50"], c["sma200"])
+            reason = entry_gate(c)
+            if reason:
+                log(f"scan: {c['symbol']} rejected: {reason}")
+            else:
+                passed.append(c)
+        candidates = passed
 
     return candidates, None
+
+
+def check_signals(symbols):
+    """Read-only: run the trend/RSI/Fibonacci entry gates on the given
+    symbols, skipping the day-change floors, and log the verdict for each.
+    Places no orders and calls no pick provider."""
+    quotes, err = get_quotes(symbols)
+    if err:
+        log(f"check: quotes failed: {err}")
+        return
+    candidates = []
+    for sym in symbols:
+        q = quotes.get(sym) or {}
+        if q.get("last") is None:
+            log(f"check: {sym}: no quote")
+            continue
+        candidates.append({"symbol": sym, "last": float(q["last"]),
+                           "day_change_pct": float(q.get("day_change_pct") or 0.0)})
+    if not candidates:
+        return
+    enrich_with_signals(candidates)
+    for c in candidates:
+        fib = c["fib"] or {}
+        log(f"check: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
+            f"sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
+            f"swing_high={c['swing_high']} swing_low={c['swing_low']} "
+            f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})}")
+        reason = entry_gate(c)
+        log(f"check: {c['symbol']}: " + (f"REJECT -- {reason}" if reason else "PASS"))
 
 
 # ============================================================================
@@ -944,11 +1071,18 @@ def main():
     ap.add_argument("--providers", type=str, default="claude,openai",
                      help="comma-separated pick providers for --compare-providers "
                           "(claude, openai); default: claude,openai")
+    ap.add_argument("--check-signals", type=str, default=None, metavar="SYMS",
+                     help="comma-separated symbols: run only the 200sma/RSI/Fibonacci entry "
+                          "gates on them (any symbol, skips day-change floors); read-only")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ACCOUNT_NUMBER_HERE":
         sys.exit("Set CONFIG['account_number'] (or the ROBINHOOD_ACCOUNT_NUMBER "
                  "env var) to your real Robinhood account number first.")
+
+    if args.check_signals:
+        check_signals([s.strip().upper() for s in args.check_signals.split(",") if s.strip()])
+        return
 
     if args.compare_providers:
         providers = tuple(dict.fromkeys(
