@@ -5,8 +5,8 @@ high_speed_trader.py
 A stateless, high-speed, EQUITY-ONLY intraday trading loop for a Robinhood
 account, built to the rules in SKILLS.md:
   - Unlimited trades per session, on a fast fixed-interval tick loop.
-  - Hard stop-loss: sell a position the moment it's down $0.50/share from
-    its entry (average buy price). Take-profit is uncapped -- winners are
+  - Hard stop-loss: sell a position the moment it's down 5% from its
+    entry (average buy price). Take-profit is uncapped -- winners are
     never force-sold while ahead.
   - Stock/equity instrument only. No options.
   - One seed universe, watched for both momentum-long (bull) and dip-buy
@@ -153,7 +153,7 @@ CONFIG = {
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
     "min_trade_usd": 25.0,          # skip an entry too small to matter
     "conviction_accept": ["high", "medium"],
-    "stop_loss_usd": 0.50,          # hard stop: exit if price is down this many dollars from entry
+    "stop_loss_pct": 5.0,           # hard stop: exit if price is down this percent from entry
     "close_out_minutes_before_close": 15,  # flatten everything this close to the bell
 
     # ----- loop -----
@@ -773,9 +773,14 @@ def in_close_out_window(now):
 
 
 # ============================================================================
-# Position management -- deterministic. The hard $0.50 stop-loss and the
+# Position management -- deterministic. The hard 5% stop-loss and the
 # close-out guard are the only exit rules; take-profit is uncapped.
 # ============================================================================
+def stop_loss_usd(entry):
+    """Per-share dollar drop from entry that triggers the hard stop."""
+    return entry * CONFIG["stop_loss_pct"] / 100.0
+
+
 def manage_positions(snapshot, approaching_close):
     for pos in snapshot["positions"]:
         symbol = pos["symbol"]
@@ -783,11 +788,13 @@ def manage_positions(snapshot, approaching_close):
         entry = pos["average_buy_price"]
         current = pos["current_price"]
         drop = entry - current
+        limit = stop_loss_usd(entry)
 
         if approaching_close:
             reason = "session close-out guard"
-        elif drop >= CONFIG["stop_loss_usd"]:
-            reason = f"hard stop-loss (down ${drop:.2f}/share, limit ${CONFIG['stop_loss_usd']:.2f})"
+        elif drop >= limit:
+            reason = (f"hard stop-loss (down ${drop:.2f}/share, limit ${limit:.2f} = "
+                      f"{CONFIG['stop_loss_pct']:g}% of entry {entry:.2f})")
         else:
             log(f"{symbol}: holding, P&L ${(current - entry) * quantity:+.2f} "
                 f"({current - entry:+.2f}/share). Upside uncapped.")
@@ -947,7 +954,8 @@ def maybe_enter(snapshot):
         notify(f"{symbol}: BUY FAILED/SKIPPED: {err}.")
         return
     notify(f"{symbol}: filled {fill['quantity']} at {float(fill['avg_price']):.2f}. "
-           f"Stop-loss active at ${CONFIG['stop_loss_usd']:.2f}/share below entry.")
+           f"Stop-loss active at {CONFIG['stop_loss_pct']:g}% "
+           f"(${stop_loss_usd(float(fill['avg_price'])):.2f}/share) below entry.")
 
 
 # ============================================================================
@@ -973,7 +981,7 @@ def tick(simulation=False):
         log("[SIMULATION] Evaluating only -- no sells or buys will be placed.")
         for pos in snapshot["positions"]:
             drop = pos["average_buy_price"] - pos["current_price"]
-            would_sell = approaching_close or drop >= CONFIG["stop_loss_usd"]
+            would_sell = approaching_close or drop >= stop_loss_usd(pos["average_buy_price"])
             log(f"[SIMULATION] {pos['symbol']}: drop ${drop:+.2f}/share, would_sell={would_sell}")
         if not approaching_close:
             settled = snapshot["settled_cash"]

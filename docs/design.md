@@ -7,7 +7,7 @@ trading loop for a Robinhood account. It implements the rules defined in
 ## Goals (from SKILLS.md)
 
 - Unlimited trades per session, evaluated on a fast, fixed-interval tick.
-- Hard stop-loss: exit a position the instant it's down $0.50/share from its
+- Hard stop-loss: exit a position the instant it's down 5% from its
   entry price. Take-profit is uncapped — no forced exit while ahead.
 - Equity/stock instrument only. No options, futures, or other derivatives.
 - A seed universe is a guideline, not a boundary.
@@ -31,7 +31,7 @@ flowchart TD
         B -- yes --> C[get_account_snapshot<br/>cash + open positions + current prices]
         C --> D{approaching_close?}
         D -- yes --> E[manage_positions:<br/>flatten everything]
-        D -- no --> F[manage_positions:<br/>$0.50 stop-loss check per position]
+        D -- no --> F[manage_positions:<br/>5% stop-loss check per position]
         E --> G
         F --> G{approaching_close?}
         G -- yes --> Z2[skip new entries]
@@ -88,7 +88,7 @@ flowchart TD
   call to the OpenAI chat completions endpoint). Either path returns a
   symbol/conviction/reason JSON blob and nothing else — it cannot place
   orders or read the account directly.
-- **Risk math**: sizing (`deploy_fraction` of settled cash), the $0.50
+- **Risk math**: sizing (`deploy_fraction` of settled cash), the 5%
   stop-loss, the close-out guard, and the conviction gate are all plain
   deterministic Python in `manage_positions` / `maybe_enter`. The AI only
   ever answers "what to buy."
@@ -107,7 +107,7 @@ flowchart TD
 4. `in_close_out_window(now)` — inside `close_out_minutes_before_close` of
    the bell?
 5. `manage_positions(snapshot, approaching_close)` — per open position: sell
-   if `approaching_close`, or if `entry - current >= stop_loss_usd`.
+   if `approaching_close`, or if `entry - current >= entry * stop_loss_pct / 100`.
    Otherwise hold; upside is never capped here.
 6. If not approaching close: `maybe_enter(snapshot)` — quote the seed
    universe, filter to the `candidate_min_daychg`..`candidate_max_daychg` window, hand the shortlist to

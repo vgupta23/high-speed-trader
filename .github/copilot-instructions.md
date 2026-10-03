@@ -58,7 +58,7 @@ There is no repo-specific lint command to standardize on right now; prefer keepi
 - Respect the hard safety gates:
   - `CONFIG["enable_live_buys"]` defaults to `False`
   - `--simulation` disables order placement for a run
-  - stop-loss is a hard `$0.50/share` rule on open positions
+  - stop-loss is a hard 5%-of-entry rule on open positions
   - positions are flattened near the close to avoid holding through the close when the loop is no longer watching
 - Secrets are loaded from a local `.env` file and should never be committed. The project expects values such as `ROBINHOOD_ACCOUNT_NUMBER`, `OPENAI_API_KEY`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`.
 - The seed universe is guidance, not a strict boundary. The AI may propose a valid symbol outside the watchlist, but it must still pass strength/tradability checks before an order is placed.

@@ -18,7 +18,7 @@ runs.
   5. Sleep until the next tick.
 - **Unlimited trades**: there is no cap on how many trades happen in a
   session. Enter and exit as many times as the rules trigger.
-- **Stop-loss**: if an open position's equity price has dropped 50 cents from
+- **Stop-loss**: if an open position's equity price has dropped 5% from
   its entry price, sell the full position immediately. This is a hard,
   non-negotiable exit — don't wait for confirmation.
 - **Take-profit**: uncapped. Let winners run; there is no forced exit while a

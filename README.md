@@ -3,7 +3,7 @@
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
 A stateless, high-speed, **equity-only** intraday trading bot for a Robinhood
-account. Every tick reads live broker state, applies a hard $0.50/share
+account. Every tick reads live broker state, applies a hard 5%
 stop-loss, and lets an AI (Claude or OpenAI) pick what to buy next — nothing
 is cached or saved between ticks. See [`SKILLS.md`](SKILLS.md) for the rules
 and [`docs/design.md`](docs/design.md) for how it's built.
@@ -172,7 +172,7 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | `deploy_fraction` | Fraction of settled cash to commit per new entry |
 | `min_trade_usd` | Skip an entry sized below this |
 | `conviction_accept` | Which AI conviction levels clear the gate |
-| `stop_loss_usd` | Hard stop: sell if price is down this many $/share |
+| `stop_loss_pct` | Hard stop: sell if price is down this percent from average cost |
 | `close_out_minutes_before_close` | Flatten everything this close to the bell |
 | `enable_live_buys` | **Stays `False` until you deliberately flip it** |
 | `tick_interval_sec` | Seconds between ticks (loop mode) |
@@ -235,7 +235,7 @@ ever runs during the regular session.
 1. Skip the tick if it's outside regular exchange hours (or the weekend).
 2. Pull a fresh account snapshot (cash + open positions + current prices) —
    nothing is reused from a prior tick.
-3. Sell any position that's down $0.50/share from its average cost, or
+3. Sell any position that's down 5% from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
 4. Otherwise, quote the seed universe and filter to day-change movers
    (names whose day change is between `candidate_min_daychg` and
