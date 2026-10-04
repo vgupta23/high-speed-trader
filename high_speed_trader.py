@@ -116,14 +116,15 @@ CONFIG = {
     "universe": [
         "AAOI", "AHER", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
         "ASTS", "AVAV", "AVGO", "AXTI", "BE", "BKSY", "BOT", "CAT",
-        "CEG", "CIFR", "COHR", "CRDO", "DRO", "EOSE", "FLY", "FORM",
-        "FPS", "GEV", "GLW", "GOOGL", "HUT", "INTC", "IONQ", "IREN",
-        "ISRG", "KLAR", "LITE", "LMND", "LMT", "LRCX", "MDB", "META",
-        "MOD", "MRVL", "MSFT", "MU", "NVDA", "NVTS", "OKLO", "ON",
-        "OUST", "PANW", "PENG", "PGY", "PURR", "QNT", "RGTI", "RKLB",
-        "ROK", "RTX", "RVII", "SMCI", "SMTC", "SOFI", "SOLS", "SPCX",
-        "TREE", "TSLA", "UBER", "VELO", "VICR", "VPG", "VRT", "VSAT",
-        "VST", "WULF", "WYFI", "XYZ", "ZS",
+        "CEG", "CIEN", "CIFR", "COHR", "CRDO", "DRO", "EOSE", "FLY",
+        "FORM", "FPS", "FTAI", "GEV", "GLW", "GOOGL", "HUT", "INTC",
+        "IONQ", "IPGP", "IREN", "ISRG", "KLAR", "LITE", "LMND", "LMT",
+        "LRCX", "MDB", "META", "MOD", "MRVL", "MSFT", "MU", "MXL",
+        "NVDA", "NVTS", "OKLO", "ON", "OUST", "PANW", "PENG", "PGY",
+        "PURR", "QNT", "RGTI", "RKLB", "ROK", "RTX", "RVII", "SMCI",
+        "SMTC", "SOFI", "SOLS", "SPCX", "TREE", "TSLA", "UBER", "VELO",
+        "VIAV", "VICR", "VPG", "VRT", "VSAT", "VST", "WULF", "WYFI",
+        "XYZ", "ZS",
     ],
     # Day-change window for a universe name to become a candidate: between
     # candidate_min_daychg and candidate_max_daychg percent, inclusive. Up
@@ -148,6 +149,11 @@ CONFIG = {
     # Downswing (high came first): retracement measured up from the low.
     "fib_lookback_days": 90,
     "fib_zone": (0.618, 0.786),
+    # Forward P/E must be positive and below forward_pe_max. Forward EPS is
+    # the next four quarters of consensus EPS estimates (get_earnings_results,
+    # quarters not yet reported); when fewer than four are published, their
+    # mean is annualized (x4). Zero or negative forward EPS rejects.
+    "forward_pe_max": 50.0,
 
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
@@ -448,6 +454,10 @@ def _trend_signals_batch(symbols):
         f"period=10, (2) type=ema period=21, (3) type=sma period=50, (4) "
         f"type=sma period=200, (5) type=rsi period={CONFIG['rsi_period']}. "
         f"For each symbol report the latest value of each. ALSO make one "
+        f"get_earnings_results call per symbol and report "
+        f"upcoming_eps_estimates: the eps.estimate values of the quarters "
+        f"whose eps.actual is null (not yet reported), oldest first, as "
+        f"numbers ([] if none). ALSO make one "
         f"get_equity_historicals call for all of the symbols with "
         f"interval=day, bounds=regular, start_time {lookback} calendar days "
         f"before now, and for each symbol report swing_high (the highest bar "
@@ -457,10 +467,12 @@ def _trend_signals_batch(symbols):
         f'fields, no prose, shaped exactly like: {{"ABC": {{"ema10": 0.0, '
         f'"ema21": 0.0, "sma50": 0.0, "sma200": 0.0, "rsi": 0.0, '
         f'"swing_high": 0.0, "swing_high_date": "2026-01-01", '
-        f'"swing_low": 0.0, "swing_low_date": "2026-01-01"}}}}.'
+        f'"swing_low": 0.0, "swing_low_date": "2026-01-01", '
+        f'"upcoming_eps_estimates": [0.0, 0.0]}}}}.'
     )
     res = claude_json(prompt, allowed_tools=mcp_tools(
-        "get_equity_technical_indicators", "get_equity_historicals"))
+        "get_equity_technical_indicators", "get_equity_historicals",
+        "get_earnings_results"))
     if "error" in res:
         return None, res["error"]
     return res, None
@@ -580,11 +592,26 @@ def daychg_gate(dc):
     return None
 
 
-def entry_gate(c):
-    """Deterministic entry gates, never left to the AI. Returns None if the
-    candidate passes, else a short rejection reason. Missing data rejects."""
+def forward_pe(price, upcoming_eps_estimates):
+    """Forward P/E from the next four quarters of consensus EPS estimates.
+    Fewer than four published estimates are annualized from their mean.
+    Returns {"forward_eps", "forward_pe", "quarters"}; forward_pe is None when
+    forward EPS is zero or negative. Returns None if there are no estimates."""
+    ests = []
+    for v in (upcoming_eps_estimates or [])[:4]:
+        try:
+            ests.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if price is None or not ests:
+        return None
+    eps = sum(ests) / len(ests) * 4
+    return {"forward_eps": eps, "forward_pe": price / eps if eps > 0 else None,
+            "quarters": len(ests)}
+
+
+def sma_gate(c):
     price, sma50, sma200 = c["last"], c.get("sma50"), c.get("sma200")
-    rsi, fib = c.get("rsi"), c.get("fib")
     if sma200 is None:
         return "200-day SMA unavailable"
     if price <= sma200:
@@ -593,18 +620,54 @@ def entry_gate(c):
         if price <= sma50:
             return (f"price {price:.2f} not above 200sma {sma200:.2f} "
                     f"nor between it and 50sma {sma50:.2f}")
+    return None
+
+
+def rsi_gate(c):
+    rsi = c.get("rsi")
     if rsi is None:
         return "RSI unavailable"
     if rsi <= CONFIG["rsi_min"]:
         return f"RSI {rsi:.1f} not above {CONFIG['rsi_min']:.0f}"
     if rsi > CONFIG["rsi_max"]:
         return f"RSI {rsi:.1f} overbought (> {CONFIG['rsi_max']:.0f})"
+    return None
+
+
+def fib_gate(c):
+    price, fib = c["last"], c.get("fib")
     if fib is None:
         return "swing high/low unavailable"
     if not fib["in_zone"]:
         lo_r, hi_r = CONFIG["fib_zone"]
         return (f"price {price:.2f} at {fib['ratio']:.3f} retracement of {fib['swing']}swing, "
                 f"outside {lo_r}-{hi_r} zone ({fib['zone_low']:.2f}-{fib['zone_high']:.2f})")
+    return None
+
+
+def forward_pe_gate(c):
+    fpe, cap = c.get("fpe"), CONFIG["forward_pe_max"]
+    if fpe is None:
+        return "forward EPS estimates unavailable"
+    if fpe["forward_pe"] is None:
+        return f"forward EPS {fpe['forward_eps']:.2f} not positive"
+    if fpe["forward_pe"] >= cap:
+        return f"forward P/E {fpe['forward_pe']:.1f} not below {cap:.0f}"
+    return None
+
+
+# Deterministic entry gates, never left to the AI, in evaluation order.
+ENTRY_GATES = (("sma", sma_gate), ("rsi", rsi_gate), ("fib", fib_gate),
+               ("forward_pe", forward_pe_gate))
+
+
+def entry_gate(c):
+    """Returns None if the candidate passes every entry gate, else the first
+    rejection reason. Missing data rejects."""
+    for _, gate in ENTRY_GATES:
+        reason = gate(c)
+        if reason:
+            return reason
     return None
 
 
@@ -622,6 +685,7 @@ def enrich_with_signals(candidates):
         c["trend"] = classify_trend(c["last"], c["ema10"], c["ema21"], c["sma50"], c["sma200"])
         c["fib"] = fib_retracement(c["last"], c["swing_high"], t.get("swing_high_date"),
                                    c["swing_low"], t.get("swing_low_date"))
+        c["fpe"] = forward_pe(c["last"], t.get("upcoming_eps_estimates"))
 
 
 def build_pick_prompt(candidates):
@@ -654,6 +718,9 @@ def build_pick_prompt(candidates):
         if fib:
             line += (f"; at {fib['ratio']:.3f} Fibonacci retracement of the last "
                      f"{fib['swing']}swing (high {c['swing_high']:.2f}, low {c['swing_low']:.2f})")
+        fpe = c.get("fpe")
+        if fpe and fpe["forward_pe"] is not None:
+            line += f"; forward P/E {fpe['forward_pe']:.1f}"
         lines.append(line)
 
     guidance = CONFIG.get("extra_pick_guidance", "").strip()
@@ -683,8 +750,9 @@ def build_pick_prompt(candidates):
         "case. "
         "Every name listed has already passed hard filters: price above the "
         "200-day SMA or between the 50-day and 200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
-        "and price sitting in the 0.618-0.786 Fibonacci retracement zone of "
-        "its last swing high/low -- a classic pullback-entry zone. "
+        "price sitting in the 0.618-0.786 Fibonacci retracement zone of "
+        "its last swing high/low -- a classic pullback-entry zone -- and a "
+        "positive forward P/E below 50. "
         "Names marked \"momentum long\" are up "
         "on the day and the case is continuation. Names marked \"dip-buy\" are "
         "down hard (more than the configured drop threshold) and the case is a "
@@ -869,8 +937,8 @@ def scan_candidates():
 
 
 def check_signals(symbols):
-    """Read-only: run the day-change window and the trend/RSI/Fibonacci entry
-    gates on the given symbols, and log the verdict for each.
+    """Read-only: run the day-change window and every entry gate (SMA, RSI,
+    Fibonacci, forward P/E) on the given symbols, and log each gate's verdict.
     Places no orders and calls no pick provider."""
     quotes, err = get_quotes(symbols)
     if err:
@@ -888,13 +956,18 @@ def check_signals(symbols):
         return
     enrich_with_signals(candidates)
     for c in candidates:
-        fib = c["fib"] or {}
+        fib, fpe = c["fib"] or {}, c["fpe"] or {}
         log(f"check: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
             f"sma50={c['sma50']} sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
             f"swing_high={c['swing_high']} swing_low={c['swing_low']} "
-            f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})}")
-        reason = daychg_gate(c["day_change_pct"]) or entry_gate(c)
-        log(f"check: {c['symbol']}: " + (f"REJECT -- {reason}" if reason else "PASS"))
+            f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})} "
+            f"fpe={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fpe.items()})}")
+        failed = 0
+        for name, gate in (("daychg", lambda c: daychg_gate(c["day_change_pct"])),) + ENTRY_GATES:
+            reason = gate(c)
+            failed += bool(reason)
+            log(f"check: {c['symbol']} gate {name}: " + (f"FAIL -- {reason}" if reason else "pass"))
+        log(f"check: {c['symbol']}: " + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
 
 
 # ============================================================================
@@ -1082,7 +1155,7 @@ def main():
                           "(claude, openai); default: claude,openai")
     ap.add_argument("--check-signals", type=str, default=None, metavar="SYMS",
                      help="comma-separated symbols: run only the day-change window and the "
-                          "200sma/RSI/Fibonacci entry gates on them (any symbol); read-only")
+                          "SMA/RSI/Fibonacci/forward-P/E entry gates on them (any symbol); read-only")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ROBINHOOD_ACCOUNT_NUMBER":
