@@ -143,6 +143,11 @@ CONFIG = {
     "rsi_period": 14,
     "rsi_min": 30.0,
     "rsi_max": 70.0,
+    # Optional trend-analysis gate (--check-signals --trend-analysis only, never
+    # an entry gate): mean volume of the last 5 trading days vs the 5 before
+    # (the past 10 trading days) must be up by at least this percent, and OBV
+    # must not be falling.
+    "volume_trend_min_pct": 0.0,
     # Price must sit in the fib_zone retracement band of the last swing
     # (highest high / lowest low over fib_lookback_days calendar days).
     # Upswing (low came first): retracement measured down from the high.
@@ -659,6 +664,20 @@ def forward_pe_gate(c):
     return None
 
 
+def volume_trend_gate(c):
+    """Optional 10-trading-day volume trend gate for trend analysis. Not part
+    of ENTRY_GATES, so it never affects live entries."""
+    vmp, obv = c.get("volume_momentum_pct"), c.get("obv_trend")
+    if vmp is None:
+        return "10-day volume trend unavailable"
+    lo = CONFIG["volume_trend_min_pct"]
+    if vmp < lo:
+        return f"10-day volume trend {vmp:+.1f}% (last 5d vs prior 5d) below {lo:+.1f}%"
+    if obv == "falling":
+        return f"volume up {vmp:+.1f}% but OBV falling"
+    return None
+
+
 # Deterministic entry gates, never left to the AI, in evaluation order.
 ENTRY_GATES = (("sma", sma_gate), ("rsi", rsi_gate), ("fib", fib_gate),
                ("forward_pe", forward_pe_gate))
@@ -939,9 +958,10 @@ def scan_candidates():
     return candidates, None
 
 
-def check_signals(symbols):
+def check_signals(symbols, trend_analysis=False):
     """Read-only: run the day-change window and every entry gate (SMA, RSI,
     Fibonacci, forward P/E) on the given symbols, and log each gate's verdict.
+    With trend_analysis, also run the 10-day volume trend gate.
     Places no orders and calls no pick provider."""
     quotes, err = get_quotes(symbols)
     if err:
@@ -958,6 +978,17 @@ def check_signals(symbols):
     if not candidates:
         return
     enrich_with_signals(candidates)
+    gates = (("daychg", lambda c: daychg_gate(c["day_change_pct"])),) + ENTRY_GATES
+    if trend_analysis:
+        vols, verr = get_volume_momentum([c["symbol"] for c in candidates])
+        if verr:
+            log(f"check: volume trend lookup failed: {verr}")
+            vols = {}
+        for c in candidates:
+            v = (vols or {}).get(c["symbol"]) or {}
+            for k in ("volume_momentum_pct", "obv_trend"):
+                c[k] = v.get(k)
+        gates += (("volume_trend", volume_trend_gate),)
     for c in candidates:
         fib, fpe = c["fib"] or {}, c["fpe"] or {}
         log(f"check: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
@@ -966,7 +997,10 @@ def check_signals(symbols):
             f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})} "
             f"fpe={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fpe.items()})}")
         failed = 0
-        for name, gate in (("daychg", lambda c: daychg_gate(c["day_change_pct"])),) + ENTRY_GATES:
+        if trend_analysis:
+            log(f"check: {c['symbol']} volume momentum_pct={c['volume_momentum_pct']} "
+                f"obv={c['obv_trend']}")
+        for name, gate in gates:
             reason = gate(c)
             failed += bool(reason)
             log(f"check: {c['symbol']} gate {name}: " + (f"FAIL -- {reason}" if reason else "pass"))
@@ -1159,6 +1193,8 @@ def main():
     ap.add_argument("--check-signals", type=str, default=None, metavar="SYMS",
                      help="comma-separated symbols: run only the day-change window and the "
                           "SMA/RSI/Fibonacci/forward-P/E entry gates on them (any symbol); read-only")
+    ap.add_argument("--trend-analysis", action="store_true",
+                     help="with --check-signals: also run the past-10-day volume trend gate")
     args = ap.parse_args()
 
     if CONFIG["account_number"] == "YOUR_ROBINHOOD_ACCOUNT_NUMBER":
@@ -1166,7 +1202,8 @@ def main():
                  "env var) to your real Robinhood account number first.")
 
     if args.check_signals:
-        check_signals([s.strip().upper() for s in args.check_signals.split(",") if s.strip()])
+        check_signals([s.strip().upper() for s in args.check_signals.split(",") if s.strip()],
+                      trend_analysis=args.trend_analysis)
         return
 
     if args.compare_providers:
