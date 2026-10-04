@@ -196,6 +196,13 @@ python3 high_speed_trader.py --compare-providers
 
 # Same, but only one provider -- e.g. an OpenAI-only bull/bear recommendation
 python3 high_speed_trader.py --compare-providers --providers openai
+
+# Run the day-change window and every entry gate on any symbols, with the
+# verdict and data value for each gate. Read-only: no orders, no pick provider.
+python3 high_speed_trader.py --check-signals RKLB,ASTS
+
+# Same, plus the past-10-day volume trend gate
+python3 high_speed_trader.py --check-signals RKLB,ASTS --trend-analysis
 ```
 
 Once you've reviewed simulated output and flipped
@@ -211,17 +218,19 @@ python3 high_speed_trader.py --loop
 
 ### CLI flags
 
-| Flag | Overrides | Default |
+| Flag | What it does | Overrides / default |
 |---|---|---|
-| `--once` | run exactly one tick | — |
-| `--loop` | run forever, sleeping between ticks | — |
-| `--interval N` | `CONFIG["tick_interval_sec"]` | `15` |
-| `--simulation` | disables all order placement for this run | off |
-| `--session-open HH:MM` | `CONFIG["session_open"]` | `09:30` |
-| `--session-close HH:MM` | `CONFIG["session_close"]` | `16:00` |
-| `--ignore-weekday` | testing only: treat weekends as in-session | off |
-| `--compare-providers` | one scan, bull-side and bear-side picks from both `claude` and `openai`; no orders, no cash check (needs `OPENAI_API_KEY`) | off |
-| `--providers LIST` | comma-separated pick providers for `--compare-providers` (`claude`, `openai`) | `claude,openai` |
+| `--once` | Run exactly one tick, then exit (for cron/launchd). One of `--once`/`--loop` is required for trading. | — |
+| `--loop` | Run forever in the foreground, sleeping between ticks. Ctrl+C to stop. | — |
+| `--interval N` | Seconds between ticks in `--loop` mode. | `CONFIG["tick_interval_sec"]`, default `15` |
+| `--simulation` | Dry run of the real tick: reads the account, reports each position's `would_sell` verdict and gets a real AI pick, but places no orders. Used with `--once`/`--loop`. | off |
+| `--session-open HH:MM` | Start of the trading window. | `CONFIG["session_open"]`, default `09:30` |
+| `--session-close HH:MM` | End of the trading window. | `CONFIG["session_close"]`, default `16:00` |
+| `--ignore-weekday` | Testing only: treat weekends as in-session too. | off |
+| `--compare-providers` | One scan, then a bull-side and a bear-side pick from each provider, logging whether they agree. No account snapshot, no cash check, no orders. Needs `OPENAI_API_KEY` for `openai`. | off |
+| `--providers LIST` | Comma-separated pick providers for `--compare-providers` (`claude`, `openai`). | `claude,openai` |
+| `--check-signals SYMS` | Comma-separated symbols (any symbol, not just the seed universe). Runs the day-change window and the SMA, RSI, Fibonacci and forward-P/E entry gates, logging pass/fail and the data values for each, then `PASS` or `REJECT`. Read-only: no orders, no pick provider. | off |
+| `--trend-analysis` | Only with `--check-signals`: also run the optional `volume_trend` gate. It compares mean volume of the last 5 trading days with the 5 before (the past 10 trading days) and requires the change to be at least `CONFIG["volume_trend_min_pct"]` (default `0`) with OBV not falling. Never an entry gate, so it doesn't affect live trading. | off |
 
 Every override flag follows the same rule: if you pass it on the command
 line, it wins; otherwise the value in `CONFIG` is used.
