@@ -114,15 +114,15 @@ CONFIG = {
     # (bull) and dip-buy (bear) setups -- every symbol is checked against
     # the day-change window each scan (see scan_candidates).
     "universe": [
-        "AAOI", "AHER", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
+        "AAOI", "AEHR", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
         "ASTS", "AVAV", "AVGO", "AXTI", "BE", "BKSY", "BOT", "CAT",
-        "CEG", "CIEN", "CIFR", "COHR", "CRDO", "DRO", "EOSE", "FLY",
-        "FORM", "FPS", "FTAI", "GEV", "GLW", "GOOGL", "HUT", "INTC",
-        "IONQ", "IPGP", "IREN", "ISRG", "KLAR", "LITE", "LMND", "LMT",
-        "LRCX", "MDB", "META", "MOD", "MRVL", "MSFT", "MU", "MXL",
-        "NVDA", "NVTS", "OKLO", "ON", "OUST", "PANW", "PENG", "PGY",
-        "PURR", "QNT", "RGTI", "RKLB", "ROK", "RTX", "RVII", "SMCI",
-        "SMTC", "SOFI", "SOLS", "SPCX", "TREE", "TSLA", "UBER", "VELO",
+        "CEG", "CIEN", "CIFR", "COHR", "CRDO", "EOSE", "FLY", "FORM",
+        "FPS", "FTAI", "GEV", "GLW", "GOOGL", "HUT", "INTC", "IONQ",
+        "IPGP", "IREN", "ISRG", "KLAR", "LITE", "LMND", "LMT", "LRCX",
+        "MDB", "META", "MOD", "MRVL", "MSFT", "MU", "MXL", "NVDA",
+        "NVTS", "OKLO", "ON", "OUST", "PANW", "PENG", "PGY", "PURR",
+        "QNT", "RGTI", "RKLB", "ROK", "RTX", "RVII", "SMCI", "SMTC",
+        "SNDK", "SOFI", "SOLS", "SPCX", "TREE", "TSLA", "UBER", "VELO",
         "VIAV", "VICR", "VPG", "VRT", "VSAT", "VST", "WULF", "WYFI",
         "XYZ", "ZS",
     ],
@@ -147,8 +147,11 @@ CONFIG = {
     # (highest high / lowest low over fib_lookback_days calendar days).
     # Upswing (low came first): retracement measured down from the high.
     # Downswing (high came first): retracement measured up from the low.
-    "fib_lookback_days": 90,
-    "fib_zone": (0.618, 0.786),
+    "fib_lookback_days": 180,
+    # 0.618 is the golden ratio the zone is centred on; the report shows how
+    # far each pass sits from it, on both upswings and downswings.
+    "fib_zone": (0.5, 0.764),
+    "fib_golden": 0.618,
     # Forward P/E must be positive and below forward_pe_max. Forward EPS is
     # the next four quarters of consensus EPS estimates (get_earnings_results,
     # quarters not yet reported); when fewer than four are published, their
@@ -750,7 +753,7 @@ def build_pick_prompt(candidates):
         "case. "
         "Every name listed has already passed hard filters: price above the "
         "200-day SMA or between the 50-day and 200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
-        "price sitting in the 0.618-0.786 Fibonacci retracement zone of "
+        "price sitting in the 0.5-0.764 Fibonacci retracement zone of "
         "its last swing high/low -- a classic pullback-entry zone -- and a "
         "positive forward P/E below 50. "
         "Names marked \"momentum long\" are up "
