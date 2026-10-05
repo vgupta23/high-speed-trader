@@ -7,8 +7,8 @@ trading loop for a Robinhood account. It implements the rules defined in
 ## Goals (from SKILLS.md)
 
 - Unlimited trades per session, evaluated on a fast, fixed-interval tick.
-- Hard stop-loss: exit a position the instant it's down 5% from its
-  entry price. Take-profit is uncapped — no forced exit while ahead.
+- Exit a position once it is up more than 8% or down 8% or more from its
+  entry price.
 - Equity/stock instrument only. No options, futures, or other derivatives.
 - A seed universe is a guideline, not a boundary.
 - Trade only during regular exchange hours.
@@ -31,7 +31,7 @@ flowchart TD
         B -- yes --> C[get_account_snapshot<br/>cash + open positions + current prices]
         C --> D{approaching_close?}
         D -- yes --> E[manage_positions:<br/>flatten everything]
-        D -- no --> F[manage_positions:<br/>5% stop-loss check per position]
+        D -- no --> F[manage_positions:<br/>+8% / -8% check per position]
         E --> G
         F --> G{approaching_close?}
         G -- yes --> Z2[skip new entries]
@@ -88,8 +88,8 @@ flowchart TD
   call to the OpenAI chat completions endpoint). Either path returns a
   symbol/conviction/reason JSON blob and nothing else — it cannot place
   orders or read the account directly.
-- **Risk math**: sizing (`deploy_fraction` of settled cash), the 5%
-  stop-loss, the close-out guard, and the conviction gate are all plain
+- **Risk math**: sizing (`deploy_fraction` of settled cash), the +8%/-8%
+  take-profit/stop-loss, the close-out guard, and the conviction gate are all plain
   deterministic Python in `manage_positions` / `maybe_enter`. The AI only
   ever answers "what to buy."
 - **Tradability guard**: because the seed universe is a guideline and not a
@@ -107,21 +107,21 @@ flowchart TD
 4. `in_close_out_window(now)` — inside `close_out_minutes_before_close` of
    the bell?
 5. `manage_positions(snapshot, approaching_close)` — per open position: sell
-   if `approaching_close`, or if `entry - current >= entry * stop_loss_pct / 100`.
-   Otherwise hold; upside is never capped here.
+   if `approaching_close`, if up more than `take_profit_pct`, or if down
+   `stop_loss_pct` or more (`evaluate_position`). Otherwise hold.
 6. If not approaching close: `maybe_enter(snapshot)` — quote the seed
    universe, filter to the `candidate_min_daychg`..`candidate_max_daychg` window, hand the shortlist to
    `pick_name`, gate on conviction, verify tradability, size the trade as
-   `settled_cash * deploy_fraction`, and buy if `enable_live_buys` is `True`.
+   `settled_cash * deploy_fraction`, and buy if `enable_live_trade` is `True`.
 
 ## Safety gates
 
-- `CONFIG["enable_live_buys"]` defaults to `False`. Sells (stop-loss,
-  close-out) always run live, since they only reduce risk; buys stay off
-  until this is deliberately flipped on.
-- `--simulation` runs the full read/decide path (including a real AI pick
-  call) without calling `place_buy` or `place_sell_all`.
-- `--compare-providers` skips the account snapshot entirely: it scans,
+- `CONFIG["enable_live_trade"]` defaults to `False` and gates both buys and
+  sells; flip it on deliberately via `ENABLE_LIVE_TRADE` in `.env`.
+- `--simulation` forces it off and runs the full read/decide path
+  (including a real AI pick call), logging SELL/HOLD recommendations per
+  position and the BUY pick, without placing any order.
+- `--ai-picks` skips the account snapshot entirely: it scans,
   sends the same candidates to each pick provider (all of them, or just
   the ones named with `--providers`), and logs the picks.
   It never reaches `place_buy` or `place_sell_all`.
@@ -132,9 +132,10 @@ flowchart TD
 ## Configuration surface
 
 All knobs live in the `CONFIG` dict at the top of `high_speed_trader.py`.
-`--interval`, `--session-open`, `--session-close`, and `--ignore-weekday`
+`--session-open`, `--session-close`, and `--ignore-weekday`
 override the matching `CONFIG` entry when passed on the command line;
-otherwise the `CONFIG` value is used. See `README.md` for the full list.
+otherwise the `CONFIG` value is used. The tick interval is set via
+`TICK_INTERVAL_SEC` in `.env` (default 15). See `README.md` for the full list.
 
 ## Known limitations / open questions
 

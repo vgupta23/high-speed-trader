@@ -3,8 +3,8 @@
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
 A stateless, high-speed, **equity-only** intraday trading bot for a Robinhood
-account. Every tick reads live broker state, applies a hard 5%
-stop-loss, and lets an AI (Claude or OpenAI) pick what to buy next — nothing
+account. Every tick reads live broker state, applies a +8%/-8%
+take-profit/stop-loss, and lets an AI (Claude or OpenAI) pick what to buy next — nothing
 is cached or saved between ticks. See [`SKILLS.md`](SKILLS.md) for the rules
 and [`docs/design.md`](docs/design.md) for how it's built.
 
@@ -172,10 +172,11 @@ trades lives in the `CONFIG` dict near the top of `high_speed_trader.py`:
 | `deploy_fraction` | Fraction of settled cash to commit per new entry |
 | `min_trade_usd` | Skip an entry sized below this |
 | `conviction_accept` | Which AI conviction levels clear the gate |
-| `stop_loss_pct` | Hard stop: sell if price is down this percent from average cost |
+| `take_profit_pct` | Sell if price is up more than this percent from average cost (default 8) |
+| `stop_loss_pct` | Sell if price is down this percent or more from average cost (default 8) |
 | `close_out_minutes_before_close` | Flatten everything this close to the bell |
-| `enable_live_buys` | **Stays `False` until you deliberately flip it** |
-| `tick_interval_sec` | Seconds between ticks (loop mode) |
+| `enable_live_trade` | **Stays `False` until you deliberately flip it** (gates buys and sells); set `ENABLE_LIVE_TRADE=True` in `.env`. `--simulation` always forces it off |
+| `tick_interval_sec` | Seconds between ticks (loop mode). Default `15`; override with `TICK_INTERVAL_SEC` in `.env` |
 | `session_open` / `session_close` / `tz` | Trading window |
 
 ## Run
@@ -186,27 +187,27 @@ Always dry-run first:
 # One simulated tick: evaluates positions and gets a real AI pick, places NO orders
 python3 high_speed_trader.py --once --simulation
 
-# Simulated loop, ticking every 15s (or CONFIG["tick_interval_sec"])
+# Simulated loop, ticking every 15s (or `TICK_INTERVAL_SEC` from `.env`)
 python3 high_speed_trader.py --loop --simulation
 
 # Ask both claude and openai for a bull-side and a bear-side pick on the
 # same scan and log whether they agree on each. Read-only: ignores cash,
 # places no orders.
-python3 high_speed_trader.py --compare-providers
+python3 high_speed_trader.py --ai-picks
 
-# Same, but only one provider -- e.g. an OpenAI-only bull/bear recommendation
-python3 high_speed_trader.py --compare-providers --providers openai
+# Same, but only the providers you name (comma-separated: claude, openai) --
+# e.g. an OpenAI-only bull/bear recommendation
+python3 high_speed_trader.py --ai-picks --providers openai
+python3 high_speed_trader.py --ai-picks --providers claude,openai
 
-# Run the day-change window and every entry gate on any symbols, with the
-# verdict and data value for each gate. Read-only: no orders, no pick provider.
-python3 high_speed_trader.py --check-signals RKLB,ASTS
-
-# Same, plus the past-10-day volume trend gate
-python3 high_speed_trader.py --check-signals RKLB,ASTS --trend-analysis
+# Run the day-change window, every entry gate and the past-10-day volume
+# trend gate on any symbols, with the verdict and data value for each gate.
+# Read-only: no orders, no pick provider.
+python3 high_speed_trader.py --trend-analysis RKLB,ASTS
 ```
 
 Once you've reviewed simulated output and flipped
-`CONFIG["enable_live_buys"] = True`:
+`ENABLE_LIVE_TRADE=True` in `.env`:
 
 ```bash
 # Single live tick (good for cron/launchd scheduling)
@@ -222,15 +223,19 @@ python3 high_speed_trader.py --loop
 |---|---|---|
 | `--once` | Run exactly one tick, then exit (for cron/launchd). One of `--once`/`--loop` is required for trading. | — |
 | `--loop` | Run forever in the foreground, sleeping between ticks. Ctrl+C to stop. | — |
-| `--interval N` | Seconds between ticks in `--loop` mode. | `CONFIG["tick_interval_sec"]`, default `15` |
 | `--simulation` | Dry run of the real tick: reads the account, reports each position's `would_sell` verdict and gets a real AI pick, but places no orders. Used with `--once`/`--loop`. | off |
 | `--session-open HH:MM` | Start of the trading window. | `CONFIG["session_open"]`, default `09:30` |
 | `--session-close HH:MM` | End of the trading window. | `CONFIG["session_close"]`, default `16:00` |
 | `--ignore-weekday` | Testing only: treat weekends as in-session too. | off |
-| `--compare-providers` | One scan, then a bull-side and a bear-side pick from each provider, logging whether they agree. No account snapshot, no cash check, no orders. Needs `OPENAI_API_KEY` for `openai`. | off |
-| `--providers LIST` | Comma-separated pick providers for `--compare-providers` (`claude`, `openai`). | `claude,openai` |
-| `--check-signals SYMS` | Comma-separated symbols (any symbol, not just the seed universe). Runs the day-change window and the SMA, RSI, Fibonacci and forward-P/E entry gates, logging pass/fail and the data values for each, then `PASS` or `REJECT`. Read-only: no orders, no pick provider. | off |
-| `--trend-analysis` | Only with `--check-signals`: also run the optional `volume_trend` gate. It compares mean volume of the last 5 trading days with the 5 before (the past 10 trading days) and requires the change to be at least `CONFIG["volume_trend_min_pct"]` (default `0`) with OBV not falling. Never an entry gate, so it doesn't affect live trading. | off |
+| `--ai-picks` | One scan, then a bull-side and a bear-side pick from each provider, logging whether they agree (`ai-picks[bull]` / `ai-picks[bear]` lines). Uses every provider unless `--providers` narrows it. No account snapshot, no cash check, no orders. Needs `OPENAI_API_KEY` for `openai`. | off |
+| `--providers LIST` | Comma-separated pick providers for `--ai-picks`: `claude`, `openai`, or both. Only valid together with `--ai-picks`; an unknown name exits with an error. | omitted = `claude,openai` |
+| `--trend-analysis SYMS` | Comma-separated symbols (any symbol, not just the seed universe). Runs the day-change window, the SMA, RSI, Fibonacci and forward-P/E entry gates and the `volume_trend` gate, logging pass/fail and the data values for each, then `PASS` or `REJECT`. `volume_trend` compares mean volume of the last 5 trading days with the 5 before (the past 10 trading days) and requires the change to be at least `CONFIG["volume_trend_min_pct"]` (default `0`) with OBV not falling; it is never an entry gate, so it doesn't affect live trading. Read-only: no orders, no pick provider. | off |
+
+`--ai-picks` and `--trend-analysis` are read-only report modes: they run
+once and exit, so `--once`/`--loop` aren't needed and no orders are ever
+placed. They replace the earlier `--compare-providers` and
+`--check-signals` flags (`--check-signals` plus `--trend-analysis` is now
+just `--trend-analysis SYMS`, which always includes the `volume_trend` gate).
 
 Every override flag follows the same rule: if you pass it on the command
 line, it wins; otherwise the value in `CONFIG` is used.
@@ -244,7 +249,7 @@ ever runs during the regular session.
 1. Skip the tick if it's outside regular exchange hours (or the weekend).
 2. Pull a fresh account snapshot (cash + open positions + current prices) —
    nothing is reused from a prior tick.
-3. Sell any position that's down 5% from its average cost, or
+3. Sell any position that's up more than 8% or down 8% or more from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
 4. Otherwise, quote the seed universe and filter to day-change movers
    (names whose day change is between `candidate_min_daychg` and
@@ -255,7 +260,7 @@ ever runs during the regular session.
    and price vs. the 50-day and 200-day SMA), ask the configured AI
    (`pick_provider`) to pick one momentum long or dip-buy bounce (or pass),
    verify conviction and tradability, and buy with `deploy_fraction` of
-   settled cash if `enable_live_buys` is on.
+   settled cash if `enable_live_trade` is on.
 
 ## Logs
 
@@ -281,7 +286,7 @@ Every write tool below (order placement/cancellation, watchlist/alert/scan
 mutations, exercises) places or changes something real — the MCP server's own
 tool descriptions say to confirm with the user before calling them in an
 interactive session; this bot's unattended use of `place_equity_order` is
-gated entirely by `CONFIG["enable_live_buys"]` (see Safety checklist below).
+gated entirely by `CONFIG["enable_live_trade"]` (see Safety checklist below).
 
 <details>
 <summary><strong>Accounts &amp; portfolio</strong></summary>
@@ -316,7 +321,7 @@ gated entirely by `CONFIG["enable_live_buys"]` (see Safety checklist below).
 | Tool | What it does |
 |---|---|
 | `review_equity_order` | Simulates an order (no execution): returns quote + pre-trade alerts (buying power, PDT, halts). **Used by this bot** — always called before `place_equity_order` for buys. |
-| `place_equity_order` | Places a real order. `side` (buy/sell), `type` (market/limit/stop_market/stop_limit), and exactly one of `quantity` or `dollar_amount` (`dollar_amount` requires `type=market`). Supports `tax_lots` for specified-lot sells, `market_hours` (regular/extended/all_day), and a `ref_id` UUID for idempotent retries. **Used by this bot** — buys sized by dollar amount, stop-loss/close-out sells by share quantity, matching how `place_buy`/`place_sell_all` call it (confirmed against this schema — see `docs/design.md`). |
+| `place_equity_order` | Places a real order. `side` (buy/sell), `type` (market/limit/stop_market/stop_limit), and exactly one of `quantity` or `dollar_amount` (`dollar_amount` requires `type=market`). Supports `tax_lots` for specified-lot sells, `market_hours` (regular/extended/all_day), and a `ref_id` UUID for idempotent retries. **Used by this bot** — buys sized by dollar amount, take-profit/stop-loss/close-out sells by share quantity, matching how `place_buy`/`place_sell_all` call it (confirmed against this schema — see `docs/design.md`). |
 | `cancel_equity_order` | Cancels an open order by `order_id`. |
 </details>
 
@@ -432,4 +437,4 @@ This bot is equity-only and never calls any option tool — see
       against the tool schema (see
       [Robinhood MCP tool reference](#robinhood-mcp-tool-reference) above).
 - [ ] Started with a small `deploy_fraction` and a small account balance.
-- [ ] Only then set `CONFIG["enable_live_buys"] = True`.
+- [ ] Only then set `ENABLE_LIVE_TRADE=True` in `.env`.

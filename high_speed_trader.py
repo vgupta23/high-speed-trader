@@ -5,9 +5,8 @@ high_speed_trader.py
 A stateless, high-speed, EQUITY-ONLY intraday trading loop for a Robinhood
 account, built to the rules in SKILLS.md:
   - Unlimited trades per session, on a fast fixed-interval tick loop.
-  - Hard stop-loss: sell a position the moment it's down 5% from its
-    entry (average buy price). Take-profit is uncapped -- winners are
-    never force-sold while ahead.
+  - Exit rule: sell a position once it is up more than 8% (take-profit)
+    or down 8% or more (stop-loss) from its entry (average buy price).
   - Stock/equity instrument only. No options.
   - One seed universe, watched for both momentum-long (bull) and dip-buy
     (bear) setups, is a guideline, not a boundary -- the AI may propose any
@@ -33,7 +32,7 @@ deterministic Python. The AI only ever chooses WHAT to buy.
 
 READ SKILLS.md AND sample.py's WARNING BEFORE RUNNING THIS WITH REAL MONEY.
 This is experimental, not a money machine. It can place real orders with no
-approval prompt once enable_live_buys is turned on. Equities can still lose
+approval prompt once enable_live_trade is turned on. Equities can still lose
 significant value between ticks. The code is unaudited. Not financial
 advice. Use money you can afford to lose, and start tiny.
 """
@@ -143,7 +142,7 @@ CONFIG = {
     "rsi_period": 14,
     "rsi_min": 30.0,
     "rsi_max": 70.0,
-    # Optional trend-analysis gate (--check-signals --trend-analysis only, never
+    # Optional trend-analysis gate (--trend-analysis only, never
     # an entry gate): mean volume of the last 5 trading days vs the 5 before
     # (the past 10 trading days) must be up by at least this percent, and OBV
     # must not be falling.
@@ -153,6 +152,9 @@ CONFIG = {
     # Upswing (low came first): retracement measured down from the high.
     # Downswing (high came first): retracement measured up from the low.
     "fib_lookback_days": 180,
+    # Fewer daily bars than this (180 calendar days is ~125 trading days) means
+    # the history came back truncated, so the swing is rejected as unavailable.
+    "fib_min_bars": 100,
     # 0.618 is the golden ratio the zone is centred on; the report shows how
     # far each pass sits from it, on both upswings and downswings.
     "fib_zone": (0.5, 0.764),
@@ -167,16 +169,17 @@ CONFIG = {
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
     "min_trade_usd": 25.0,          # skip an entry too small to matter
     "conviction_accept": ["high", "medium"],
-    "stop_loss_pct": 5.0,           # hard stop: exit if price is down this percent from entry
+    "take_profit_pct": 8.0,         # sell if price is up MORE than this percent from entry
+    "stop_loss_pct": 8.0,           # sell if price is down this percent or more from entry
     "close_out_minutes_before_close": 15,  # flatten everything this close to the bell
 
     # ----- loop -----
-    "tick_interval_sec": 15,        # seconds between ticks; override with --interval
+    "tick_interval_sec": int(os.environ.get("TICK_INTERVAL_SEC", "").strip() or "15"),  # seconds between ticks; default 15, override in .env
 
-    # Safety gate. Sells (stop-loss, close-out) always run live -- they only
-    # reduce risk. Buys stay OFF until you've dry-run with --simulation and
-    # deliberately flip this to True.
-    "enable_live_buys": False,
+    # Master trading switch. Off by default: no buy or sell order is ever
+    # placed. ENABLE_LIVE_TRADE in .env turns it on (true/1/yes/on); --simulation
+    # always forces it off.
+    "enable_live_trade": os.environ.get("ENABLE_LIVE_TRADE", "").strip().lower() in ("true", "1", "yes", "on"),
 
     # ----- session: regular exchange hours only -----
     "tz": "America/New_York",
@@ -386,6 +389,24 @@ def get_quotes(symbols):
     return res, None
 
 
+# Volume half of a prompt, shared by get_volume_momentum and the combined
+# trend-signal call (get_trend_signals with include_volume=True).
+VOLUME_CLAUSE = (
+    "(1) get_equity_historicals with interval=day, bounds=regular, "
+    "covering roughly the last 15 calendar days, to get daily volume "
+    "bars; (2) get_equity_technical_indicators with type=obv, "
+    "interval=day, covering that same range, to get On-Balance-Volume. "
+    "For each symbol, using the historicals volume bars: take the most "
+    "recent 5 trading days as the recent window and the 5 trading days "
+    "immediately before that as the baseline window, then compute "
+    "volume_momentum_pct = (mean volume, recent window - mean volume, "
+    "baseline window) / mean volume, baseline window * 100. "
+    "Using the OBV series, report obv_trend as \"rising\" if the latest "
+    "OBV value is clearly above its value from 5 trading days ago, "
+    "\"falling\" if clearly below, else \"flat\". "
+)
+
+
 def get_volume_momentum(symbols):
     """Trailing 5-trading-day volume trend per symbol -- deliberately NOT a
     single day's volume. Cross-checks two independent broker-rail sources so
@@ -401,19 +422,7 @@ def get_volume_momentum(symbols):
     data, not a reason to abandon the scan."""
     prompt = (
         f"For these equity symbols: {', '.join(symbols)}, make BOTH calls: "
-        f"(1) get_equity_historicals with interval=day, bounds=regular, "
-        f"covering roughly the last 15 calendar days, to get daily volume "
-        f"bars; (2) get_equity_technical_indicators with type=obv, "
-        f"interval=day, covering that same range, to get On-Balance-Volume. "
-        f"For each symbol, using the historicals volume bars: take the most "
-        f"recent 5 trading days as the recent window and the 5 trading days "
-        f"immediately before that as the baseline window, then compute "
-        f"avg_volume_recent5 (mean volume, recent window), avg_volume_prior5 "
-        f"(mean volume, baseline window), and volume_momentum_pct = "
-        f"(avg_volume_recent5 - avg_volume_prior5) / avg_volume_prior5 * 100. "
-        f"Using the OBV series, report obv_trend as \"rising\" if the latest "
-        f"OBV value is clearly above its value from 5 trading days ago, "
-        f"\"falling\" if clearly below, else \"flat\". "
+        + VOLUME_CLAUSE +
         f"Reply with ONLY a JSON object mapping symbol to fields, no prose, "
         f'shaped exactly like: {{"ABC": {{"volume_momentum_pct": 0.0, '
         f'"obv_trend": "rising"}}}}.'
@@ -425,7 +434,7 @@ def get_volume_momentum(symbols):
     return res, None
 
 
-def get_trend_signals(symbols):
+def get_trend_signals(symbols, include_volume=False):
     """Daily moving averages per symbol -- 10-day EMA, 21-day EMA, 50-day SMA,
     and 200-day SMA -- used to classify each candidate's longer-term trend as
     bullish, bearish, or neutral (see classify_trend). The AI only ever gets
@@ -433,13 +442,15 @@ def get_trend_signals(symbols):
     same as the stop-loss.
     Runs in batches of CONFIG["trend_batch_size"] symbols, in parallel, so a
     single failed or slow batch only loses those symbols.
+    With include_volume, the same call also returns volume_momentum_pct and
+    obv_trend (see VOLUME_CLAUSE), so no second model call is needed.
     Best-effort: callers should treat a failure here as missing enrichment
     data, not a reason to abandon the scan."""
     size = max(1, CONFIG["trend_batch_size"])
     batches = [symbols[k:k + size] for k in range(0, len(symbols), size)]
     merged, errors = {}, []
     with ThreadPoolExecutor(max_workers=CONFIG["trend_max_workers"]) as pool:
-        for batch, (res, err) in zip(batches, pool.map(_trend_signals_batch, batches)):
+        for batch, (res, err) in zip(batches, pool.map(lambda b: _trend_signals_batch(b, include_volume), batches)):
             if err:
                 errors.append(f"{','.join(batch)}: {err}")
             else:
@@ -451,7 +462,7 @@ def get_trend_signals(symbols):
     return merged, None
 
 
-def _trend_signals_batch(symbols):
+def _trend_signals_batch(symbols, include_volume=False):
     """One claude call for one batch of get_trend_signals."""
     lookback = CONFIG["fib_lookback_days"]
     prompt = (
@@ -468,16 +479,22 @@ def _trend_signals_batch(symbols):
         f"numbers ([] if none). ALSO make one "
         f"get_equity_historicals call for all of the symbols with "
         f"interval=day, bounds=regular, start_time {lookback} calendar days "
-        f"before now, and for each symbol report swing_high (the highest bar "
-        f"high in that range) with swing_high_date (YYYY-MM-DD of that bar), "
-        f"and swing_low (the lowest bar low in that range) with "
-        f"swing_low_date. Reply with ONLY a JSON object mapping symbol to "
+        f"before now, and for each symbol report bars: EVERY daily bar in that "
+        f"range, oldest first, as [YYYY-MM-DD, high, low] -- copy the values "
+        f"exactly, do not summarize, skip or pick extremes yourself. "
+        f"Reply with ONLY a JSON object mapping symbol to "
         f'fields, no prose, shaped exactly like: {{"ABC": {{"ema10": 0.0, '
         f'"ema21": 0.0, "sma50": 0.0, "sma200": 0.0, "rsi": 0.0, '
-        f'"swing_high": 0.0, "swing_high_date": "2026-01-01", '
-        f'"swing_low": 0.0, "swing_low_date": "2026-01-01", '
-        f'"upcoming_eps_estimates": [0.0, 0.0]}}}}.'
+        f'"bars": [["2026-01-02", 0.0, 0.0]], '
+        f'"upcoming_eps_estimates": [0.0, 0.0]'
+        + (', "volume_momentum_pct": 0.0, "obv_trend": "rising"' if include_volume else "")
+        + "}}."
     )
+    if include_volume:
+        # Splice the volume instructions in before the reply-format sentence.
+        head, tail = prompt.split("Reply with ONLY", 1)
+        prompt = (head + "ALSO, for volume: make these calls too -- " + VOLUME_CLAUSE
+                  + "Reply with ONLY" + tail)
     res = claude_json(prompt, allowed_tools=mcp_tools(
         "get_equity_technical_indicators", "get_equity_historicals",
         "get_earnings_results"))
@@ -523,8 +540,8 @@ def is_tradable_equity(symbol):
 
 
 def place_buy(symbol, dollars):
-    if not CONFIG["enable_live_buys"]:
-        return None, "live buys disabled (CONFIG['enable_live_buys'] is False)"
+    if not CONFIG["enable_live_trade"]:
+        return None, "live trading disabled (ENABLE_LIVE_TRADE is not true or --simulation)"
     acct = CONFIG["account_number"]
     prompt = (
         f"On Robinhood account {acct}, FIRST review, THEN place a real market "
@@ -543,6 +560,8 @@ def place_buy(symbol, dollars):
 
 
 def place_sell_all(symbol, quantity):
+    if not CONFIG["enable_live_trade"]:
+        return None, "live trading disabled (ENABLE_LIVE_TRADE is not true or --simulation)"
     acct = CONFIG["account_number"]
     prompt = (
         f"On Robinhood account {acct}, place a real market SELL closing the "
@@ -564,6 +583,30 @@ def place_sell_all(symbol, quantity):
 # The single AI judgment for entries: pick one name to buy, or pass. Never
 # used for exits -- the stop-loss and close-out guard are deterministic.
 # ============================================================================
+def swing_from_bars(bars):
+    """Deterministic swing high/low from raw daily bars ([date, high, low]
+    rows, as returned by the model): the highest high and lowest low within
+    CONFIG["fib_lookback_days"] calendar days of the latest bar. The model only
+    copies bars; it never picks the extremes. Ties go to the earliest bar.
+    Returns (swing_high, high_date, swing_low, low_date), or None if the bars
+    are missing, malformed, or too few to trust (CONFIG["fib_min_bars"])."""
+    rows = []
+    try:
+        for d, hi, lo in bars or []:
+            rows.append((dt.date.fromisoformat(str(d)[:10]), float(hi), float(lo)))
+    except (TypeError, ValueError):
+        return None
+    if not rows:
+        return None
+    cutoff = max(r[0] for r in rows) - dt.timedelta(days=CONFIG["fib_lookback_days"])
+    rows = sorted(r for r in rows if r[0] >= cutoff)
+    if len(rows) < CONFIG["fib_min_bars"]:
+        return None
+    top = max(rows, key=lambda r: (r[1], -r[0].toordinal()))
+    bot = min(rows, key=lambda r: (r[2], r[0].toordinal()))
+    return top[1], top[0].isoformat(), bot[2], bot[0].isoformat()
+
+
 def fib_retracement(price, swing_high, swing_high_date, swing_low, swing_low_date):
     """Where price sits in the last swing, as a Fibonacci retracement ratio.
       - upswing (low printed before the high): ratio = (high - price) / range,
@@ -665,7 +708,7 @@ def forward_pe_gate(c):
 
 
 def volume_trend_gate(c):
-    """Optional 10-trading-day volume trend gate for trend analysis. Not part
+    """10-trading-day volume trend gate, run by --trend-analysis. Not part
     of ENTRY_GATES, so it never affects live entries."""
     vmp, obv = c.get("volume_momentum_pct"), c.get("obv_trend")
     if vmp is None:
@@ -693,21 +736,28 @@ def entry_gate(c):
     return None
 
 
-def enrich_with_signals(candidates):
-    """Attach trend/RSI/Fibonacci signals to each candidate in place."""
-    trend_signals, err = get_trend_signals([c["symbol"] for c in candidates])
+def enrich_with_signals(candidates, include_volume=False):
+    """Attach trend/RSI/Fibonacci signals to each candidate in place. With
+    include_volume, also attach volume_momentum_pct and obv_trend from the
+    same model call."""
+    trend_signals, err = get_trend_signals([c["symbol"] for c in candidates], include_volume)
     if err:
         log(f"scan: trend signal lookup failed: {err}")
         trend_signals = {}
     for c in candidates:
         t = trend_signals.get(c["symbol"]) or {}
-        for k in ("ema10", "ema21", "sma50", "sma200", "rsi", "swing_high", "swing_low"):
+        for k in ("ema10", "ema21", "sma50", "sma200", "rsi"):
             v = t.get(k)
             c[k] = float(v) if v is not None else None
+        swing = swing_from_bars(t.get("bars"))
+        c["swing_high"], hi_date, c["swing_low"], lo_date = swing or (None, None, None, None)
         c["trend"] = classify_trend(c["last"], c["ema10"], c["ema21"], c["sma50"], c["sma200"])
-        c["fib"] = fib_retracement(c["last"], c["swing_high"], t.get("swing_high_date"),
-                                   c["swing_low"], t.get("swing_low_date"))
+        c["fib"] = fib_retracement(c["last"], c["swing_high"], hi_date,
+                                   c["swing_low"], lo_date)
         c["fpe"] = forward_pe(c["last"], t.get("upcoming_eps_estimates"))
+        if include_volume:
+            c["volume_momentum_pct"] = t.get("volume_momentum_pct")
+            c["obv_trend"] = t.get("obv_trend")
 
 
 def build_pick_prompt(candidates):
@@ -863,12 +913,22 @@ def in_close_out_window(now):
 
 
 # ============================================================================
-# Position management -- deterministic. The hard 5% stop-loss and the
-# close-out guard are the only exit rules; take-profit is uncapped.
+# Position management -- deterministic. A position is sold once it is up more
+# than take_profit_pct or down stop_loss_pct or more from entry, or by the
+# close-out guard; otherwise it is held.
 # ============================================================================
-def stop_loss_usd(entry):
-    """Per-share dollar drop from entry that triggers the hard stop."""
-    return entry * CONFIG["stop_loss_pct"] / 100.0
+def evaluate_position(pos, approaching_close):
+    """Return (action, reason) where action is 'sell' or 'hold'."""
+    entry = pos["average_buy_price"]
+    current = pos["current_price"]
+    change_pct = (current - entry) / entry * 100.0 if entry else 0.0
+    if approaching_close:
+        return "sell", "session close-out guard"
+    if change_pct > CONFIG["take_profit_pct"]:
+        return "sell", f"take-profit (up {change_pct:.2f}% > {CONFIG['take_profit_pct']:g}%)"
+    if change_pct <= -CONFIG["stop_loss_pct"]:
+        return "sell", f"stop-loss (down {-change_pct:.2f}% >= {CONFIG['stop_loss_pct']:g}%)"
+    return "hold", f"{change_pct:+.2f}% within +{CONFIG['take_profit_pct']:g}% / -{CONFIG['stop_loss_pct']:g}%"
 
 
 def manage_positions(snapshot, approaching_close):
@@ -877,23 +937,16 @@ def manage_positions(snapshot, approaching_close):
         quantity = pos["quantity"]
         entry = pos["average_buy_price"]
         current = pos["current_price"]
-        drop = entry - current
-        limit = stop_loss_usd(entry)
+        action, reason = evaluate_position(pos, approaching_close)
 
-        if approaching_close:
-            reason = "session close-out guard"
-        elif drop >= limit:
-            reason = (f"hard stop-loss (down ${drop:.2f}/share, limit ${limit:.2f} = "
-                      f"{CONFIG['stop_loss_pct']:g}% of entry {entry:.2f})")
-        else:
-            log(f"{symbol}: holding, P&L ${(current - entry) * quantity:+.2f} "
-                f"({current - entry:+.2f}/share). Upside uncapped.")
+        if action == "hold":
+            log(f"{symbol}: holding, P&L ${(current - entry) * quantity:+.2f} ({reason}).")
             continue
 
         notify(f"{symbol}: selling all {quantity} shares at ~{current:.2f} ({reason}).")
         fill, err = place_sell_all(symbol, quantity)
         if err:
-            notify(f"{symbol}: SELL FAILED: {err}. Will retry next tick.")
+            notify(f"{symbol}: SELL FAILED/SKIPPED: {err}.")
             continue
         proceeds = float(fill["avg_price"]) * float(fill["quantity"])
         cost = entry * quantity
@@ -901,14 +954,10 @@ def manage_positions(snapshot, approaching_close):
 
 
 # ============================================================================
-# Candidate scan -- shared by the live entry path and --simulation. Quotes
-# the whole universe and returns names whose day change is within
-# candidate_min_daychg..candidate_max_daychg, tagged bull_or_bear: up names
-# are bull (momentum long), down names are bear (dip-buy -- a potential
-# bounce). Anything outside the window is treated as a one-day outlier. Each surviving candidate is also tagged with its longer-term
-# bull/bear trend (classify_trend): bullish means the 10-day EMA is above
-# the 21-day EMA and price is holding both the 50-day and 200-day SMA;
-# bearish means price has broken below all three levels.
+# Candidate scan -- one quote call over the whole universe, keep names whose
+# day change is inside the window (daychg_gate), tag each bull (up) or bear
+# (down), attach trend/RSI/Fibonacci/forward-P/E/volume signals, then drop
+# anything that fails an entry gate.
 # ============================================================================
 def scan_candidates():
     universe = list(dict.fromkeys(CONFIG["universe"]))
@@ -931,21 +980,12 @@ def scan_candidates():
             log(f"scan: {sym} {reason}, excluding as an outlier.")
             continue
         candidates.append({"symbol": sym, "day_change_pct": dc, "last": float(last),
-                            "bull_or_bear": "bull" if dc >= 0 else "bear"})
+                           "bull_or_bear": "bull" if dc >= 0 else "bear"})
 
     candidates.sort(key=lambda c: abs(c["day_change_pct"]), reverse=True)
 
     if candidates:
-        vol, err = get_volume_momentum([c["symbol"] for c in candidates])
-        if err:
-            log(f"scan: volume momentum lookup failed, continuing without it: {err}")
-            vol = {}
-        for c in candidates:
-            v = vol.get(c["symbol"]) or {}
-            c["volume_momentum_pct"] = v.get("volume_momentum_pct")
-            c["obv_trend"] = v.get("obv_trend")
-
-        enrich_with_signals(candidates)
+        enrich_with_signals(candidates, include_volume=True)
         passed = []
         for c in candidates:
             reason = entry_gate(c)
@@ -958,53 +998,45 @@ def scan_candidates():
     return candidates, None
 
 
-def check_signals(symbols, trend_analysis=False):
-    """Read-only: run the day-change window and every entry gate (SMA, RSI,
-    Fibonacci, forward P/E) on the given symbols, and log each gate's verdict.
-    With trend_analysis, also run the 10-day volume trend gate.
-    Places no orders and calls no pick provider."""
+def trend_analysis(symbols):
+    """Read-only (--trend-analysis): run the day-change window, every entry
+    gate and the 10-day volume trend gate on the given symbols, and log each
+    gate's verdict with the data values. Places no orders and calls no pick
+    provider."""
     quotes, err = get_quotes(symbols)
     if err:
-        log(f"check: quotes failed: {err}")
+        log(f"trend-analysis: quotes failed: {err}")
         return
     candidates = []
     for sym in symbols:
         q = quotes.get(sym) or {}
         if q.get("last") is None:
-            log(f"check: {sym}: no quote")
+            log(f"trend-analysis: {sym}: no quote")
             continue
         candidates.append({"symbol": sym, "last": float(q["last"]),
                            "day_change_pct": float(q.get("day_change_pct") or 0.0)})
     if not candidates:
         return
-    enrich_with_signals(candidates)
-    gates = (("daychg", lambda c: daychg_gate(c["day_change_pct"])),) + ENTRY_GATES
-    if trend_analysis:
-        vols, verr = get_volume_momentum([c["symbol"] for c in candidates])
-        if verr:
-            log(f"check: volume trend lookup failed: {verr}")
-            vols = {}
-        for c in candidates:
-            v = (vols or {}).get(c["symbol"]) or {}
-            for k in ("volume_momentum_pct", "obv_trend"):
-                c[k] = v.get(k)
-        gates += (("volume_trend", volume_trend_gate),)
+    enrich_with_signals(candidates, include_volume=True)
+    gates = ((("daychg", lambda c: daychg_gate(c["day_change_pct"])),)
+             + ENTRY_GATES + (("volume_trend", volume_trend_gate),))
     for c in candidates:
         fib, fpe = c["fib"] or {}, c["fpe"] or {}
-        log(f"check: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
+        rnd = lambda d: json.dumps({k: round(v, 3) if isinstance(v, float) else v
+                                    for k, v in d.items()})
+        log(f"trend-analysis: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
             f"sma50={c['sma50']} sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
             f"swing_high={c['swing_high']} swing_low={c['swing_low']} "
-            f"fib={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fib.items()})} "
-            f"fpe={json.dumps({k: round(v, 3) if isinstance(v, float) else v for k, v in fpe.items()})}")
+            f"fib={rnd(fib)} fpe={rnd(fpe)} "
+            f"volume_momentum_pct={c['volume_momentum_pct']} obv={c['obv_trend']}")
         failed = 0
-        if trend_analysis:
-            log(f"check: {c['symbol']} volume momentum_pct={c['volume_momentum_pct']} "
-                f"obv={c['obv_trend']}")
         for name, gate in gates:
             reason = gate(c)
             failed += bool(reason)
-            log(f"check: {c['symbol']} gate {name}: " + (f"FAIL -- {reason}" if reason else "pass"))
-        log(f"check: {c['symbol']}: " + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
+            log(f"trend-analysis: {c['symbol']} gate {name}: "
+                + (f"FAIL -- {reason}" if reason else "pass"))
+        log(f"trend-analysis: {c['symbol']}: "
+            + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
 
 
 # ============================================================================
@@ -1064,8 +1096,7 @@ def maybe_enter(snapshot):
         notify(f"{symbol}: BUY FAILED/SKIPPED: {err}.")
         return
     notify(f"{symbol}: filled {fill['quantity']} at {float(fill['avg_price']):.2f}. "
-           f"Stop-loss active at {CONFIG['stop_loss_pct']:g}% "
-           f"(${stop_loss_usd(float(fill['avg_price'])):.2f}/share) below entry.")
+           f"Sells at +{CONFIG['take_profit_pct']:g}% or -{CONFIG['stop_loss_pct']:g}% from entry.")
 
 
 # ============================================================================
@@ -1090,9 +1121,8 @@ def tick(simulation=False):
     if simulation:
         log("[SIMULATION] Evaluating only -- no sells or buys will be placed.")
         for pos in snapshot["positions"]:
-            drop = pos["average_buy_price"] - pos["current_price"]
-            would_sell = approaching_close or drop >= stop_loss_usd(pos["average_buy_price"])
-            log(f"[SIMULATION] {pos['symbol']}: drop ${drop:+.2f}/share, would_sell={would_sell}")
+            action, reason = evaluate_position(pos, approaching_close)
+            log(f"[SIMULATION] {pos['symbol']}: recommend {action.upper()} ({reason})")
         if not approaching_close:
             settled = snapshot["settled_cash"]
             if settled >= CONFIG["min_trade_usd"]:
@@ -1100,7 +1130,7 @@ def tick(simulation=False):
                 if not qerr and candidates:
                     pick, perr = pick_name(candidates)
                     if not perr:
-                        log(f"[SIMULATION] pick: {pick}")
+                        log(f"[SIMULATION] pick (recommend BUY if decision=buy): {pick}")
         return
 
     if snapshot["positions"]:
@@ -1121,12 +1151,12 @@ def tick(simulation=False):
 # bull_or_bear side so you still get an independent recommendation for
 # momentum longs and dip-buys, not just one pick across both.
 # ============================================================================
-def _compare_side(label, candidates, providers):
+def _ai_picks_side(label, candidates, providers):
     if not candidates:
-        log(f"compare[{label}]: no candidates clear the day-change window.")
+        log(f"ai-picks[{label}]: no candidates clear the day-change window.")
         return
 
-    log(f"compare[{label}]: {len(candidates)} candidates: "
+    log(f"ai-picks[{label}]: {len(candidates)} candidates: "
         + ", ".join(f"{c['symbol']} {c['day_change_pct']:+.2f}%" for c in candidates))
 
     original = CONFIG["pick_provider"]
@@ -1136,7 +1166,7 @@ def _compare_side(label, candidates, providers):
             CONFIG["pick_provider"] = provider
             pick, perr = pick_name(candidates)
             picks[provider] = pick
-            log(f"compare[{label}]: {provider}: {perr or json.dumps(pick)}")
+            log(f"ai-picks[{label}]: {provider}: {perr or json.dumps(pick)}")
     finally:
         CONFIG["pick_provider"] = original
 
@@ -1149,33 +1179,31 @@ def _compare_side(label, candidates, providers):
         else:
             chosen[provider] = "pass"
     verdict = "AGREE" if len(set(chosen.values())) == 1 else "DISAGREE"
-    log(f"compare[{label}]: {verdict} -- " + ", ".join(f"{p}={s}" for p, s in chosen.items()))
+    log(f"ai-picks[{label}]: {verdict} -- " + ", ".join(f"{p}={s}" for p, s in chosen.items()))
 
 
-def compare_providers(providers=("claude", "openai")):
+def ai_picks(providers=("claude", "openai")):
     if not in_session(now_tz()):
-        log("compare: outside regular exchange hours; quotes may be stale.")
+        log("ai-picks: outside regular exchange hours; quotes may be stale.")
 
     candidates, err = scan_candidates()
     if err:
-        log(f"compare: quotes failed: {err}")
+        log(f"ai-picks: quotes failed: {err}")
         return
     if not candidates:
-        log("compare: no candidates clear the day-change window.")
+        log("ai-picks: no candidates clear the day-change window.")
         return
 
     bulls = [c for c in candidates if c["bull_or_bear"] == "bull"]
     bears = [c for c in candidates if c["bull_or_bear"] == "bear"]
-    _compare_side("bull", bulls, providers)
-    _compare_side("bear", bears, providers)
+    _ai_picks_side("bull", bulls, providers)
+    _ai_picks_side("bear", bears, providers)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Stateless high-speed equity trader (Robinhood MCP).")
     ap.add_argument("--once", action="store_true", help="run a single tick (for a scheduler)")
     ap.add_argument("--loop", action="store_true", help="run a foreground poll loop")
-    ap.add_argument("--interval", type=int, default=None,
-                     help="seconds between ticks (default: CONFIG['tick_interval_sec'])")
     ap.add_argument("--simulation", action="store_true",
                      help="dry-run: evaluate positions and the pick, place no orders")
     ap.add_argument("--session-open", type=str, default=None,
@@ -1184,42 +1212,45 @@ def main():
                      help="override CONFIG['session_close'], e.g. 16:00")
     ap.add_argument("--ignore-weekday", action="store_true",
                      help="testing only: treat weekends as in-session too")
-    ap.add_argument("--compare-providers", action="store_true",
-                     help="scan once and ask both claude and openai for a bull-side and a "
-                          "bear-side pick; read-only, ignores cash, places no orders")
-    ap.add_argument("--providers", type=str, default="claude,openai",
-                     help="comma-separated pick providers for --compare-providers "
+    ap.add_argument("--ai-picks", action="store_true",
+                     help="one scan, then a bull-side and a bear-side pick from each "
+                          "provider, logging whether they agree; read-only")
+    ap.add_argument("--providers", type=str, default=None, metavar="LIST",
+                     help="comma-separated pick providers for --ai-picks "
                           "(claude, openai); default: claude,openai")
-    ap.add_argument("--check-signals", type=str, default=None, metavar="SYMS",
-                     help="comma-separated symbols: run only the day-change window and the "
-                          "SMA/RSI/Fibonacci/forward-P/E entry gates on them (any symbol); read-only")
-    ap.add_argument("--trend-analysis", action="store_true",
-                     help="with --check-signals: also run the past-10-day volume trend gate")
+    ap.add_argument("--trend-analysis", type=str, default=None, metavar="SYMS",
+                     help="comma-separated symbols: run the day-change window, the "
+                          "SMA/RSI/Fibonacci/forward-P/E entry gates and the past-10-day "
+                          "volume trend gate on them (any symbol), with data values; read-only")
     args = ap.parse_args()
+    if args.simulation:
+        CONFIG["enable_live_trade"] = False  # simulation never places orders
 
     if CONFIG["account_number"] == "YOUR_ROBINHOOD_ACCOUNT_NUMBER":
         sys.exit("Set CONFIG['account_number'] (or the ROBINHOOD_ACCOUNT_NUMBER "
                  "env var) to your real Robinhood account number first.")
 
-    if args.check_signals:
-        check_signals([s.strip().upper() for s in args.check_signals.split(",") if s.strip()],
-                      trend_analysis=args.trend_analysis)
+    if args.trend_analysis:
+        trend_analysis([s.strip().upper() for s in args.trend_analysis.split(",") if s.strip()])
         return
 
-    if args.compare_providers:
+    if args.providers is not None and not args.ai_picks:
+        sys.exit("--providers only applies together with --ai-picks.")
+
+    if args.ai_picks:
         providers = tuple(dict.fromkeys(
-            p.strip().lower() for p in args.providers.split(",") if p.strip()))
+            p.strip().lower() for p in (args.providers or "claude,openai").split(",") if p.strip()))
         unknown = [p for p in providers if p not in ("claude", "openai")]
         if not providers or unknown:
             sys.exit(f"--providers must list claude and/or openai, got '{args.providers}'.")
-        compare_providers(providers)
+        ai_picks(providers)
         return
 
     if not args.once and not args.loop:
         ap.print_help()
         sys.exit(1)
 
-    interval = args.interval if args.interval is not None else CONFIG["tick_interval_sec"]
+    interval = CONFIG["tick_interval_sec"]
     if args.session_open is not None:
         CONFIG["session_open"] = args.session_open
     if args.session_close is not None:
@@ -1227,7 +1258,7 @@ def main():
     if args.ignore_weekday:
         CONFIG["ignore_weekday"] = True
 
-    log(f"provider={CONFIG['pick_provider']} enable_live_buys={CONFIG['enable_live_buys']} "
+    log(f"provider={CONFIG['pick_provider']} enable_live_trade={CONFIG['enable_live_trade']} "
         f"simulation={args.simulation} interval={interval} "
         f"session={CONFIG['session_open']}-{CONFIG['session_close']} "
         f"ignore_weekday={CONFIG['ignore_weekday']}")

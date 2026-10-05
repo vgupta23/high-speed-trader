@@ -20,8 +20,8 @@ python3 high_speed_trader.py --once --simulation
 # simulated loop
 python3 high_speed_trader.py --loop --simulation
 
-# compare Claude vs OpenAI picks without placing orders
-python3 high_speed_trader.py --compare-providers
+# compare Claude vs OpenAI picks without placing orders (--providers narrows it)
+python3 high_speed_trader.py --ai-picks
 
 # CLI help / argument reference
 python3 high_speed_trader.py --help
@@ -56,9 +56,9 @@ There is no repo-specific lint command to standardize on right now; prefer keepi
 - Treat the repo as equity-only. Do not introduce options, futures, crypto, or other derivatives logic.
 - Never add persisted state. No DB, no cache, no local memory of positions or fills across ticks. Re-read live broker state every cycle.
 - Respect the hard safety gates:
-  - `CONFIG["enable_live_buys"]` defaults to `False`
+  - `CONFIG["enable_live_trade"]` defaults to `False`
   - `--simulation` disables order placement for a run
-  - stop-loss is a hard 5%-of-entry rule on open positions
+  - sells fire at more than +8% or at -8% or worse versus entry on open positions
   - positions are flattened near the close to avoid holding through the close when the loop is no longer watching
 - Secrets are loaded from a local `.env` file and should never be committed. The project expects values such as `ROBINHOOD_ACCOUNT_NUMBER`, `OPENAI_API_KEY`, `CLAUDE_MODEL`, `OPENAI_MODEL`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`.
 - The seed universe is guidance, not a strict boundary. The AI may propose a valid symbol outside the watchlist, but it must still pass strength/tradability checks before an order is placed.
@@ -71,7 +71,7 @@ There is no repo-specific lint command to standardize on right now; prefer keepi
 - Before changing trading logic, check `SKILLS.md` for the non-negotiable rules and `docs/design.md` for the implementation structure.
 - Keep new configuration in `CONFIG` rather than scattering environment-specific values across the file.
 - If a change affects the broker rail, verify it still routes through the configured client + Robinhood MCP rather than bypassing that path. Do not advertise another MCP client as supported without implementing its invocation and tool-permission adapter.
-- If a change affects live-buy safety, explicitly reason about `--simulation` and `enable_live_buys` behavior.
+- If a change affects live-buy safety, explicitly reason about `--simulation` and `enable_live_trade` behavior.
 
 ## Relevant repo docs
 
