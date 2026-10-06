@@ -151,19 +151,19 @@ CONFIG = {
     # (highest high / lowest low over fib_lookback_days calendar days).
     # Upswing (low came first): retracement measured down from the high.
     # Downswing (high came first): retracement measured up from the low.
-    "fib_lookback_days": 180,
-    # Fewer daily bars than this (180 calendar days is ~125 trading days) means
+    "fib_lookback_days": 119,
+    # Fewer daily bars than this (180 calendar days is ~85 trading days) means
     # the history came back truncated, so the swing is rejected as unavailable.
-    "fib_min_bars": 100,
+    "fib_min_bars": 75,
     # 0.618 is the golden ratio the zone is centred on; the report shows how
     # far each pass sits from it, on both upswings and downswings.
-    "fib_zone": (0.5, 0.764),
+    "fib_zone": (0.382, 0.764),
     "fib_golden": 0.618,
     # Forward P/E must be positive and below forward_pe_max. Forward EPS is
     # the next four quarters of consensus EPS estimates (get_earnings_results,
     # quarters not yet reported); when fewer than four are published, their
     # mean is annualized (x4). Zero or negative forward EPS rejects.
-    "forward_pe_max": 50.0,
+    "forward_pe_max": 90.0,
 
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
@@ -466,12 +466,13 @@ def _trend_signals_batch(symbols, include_volume=False):
     """One claude call for one batch of get_trend_signals."""
     lookback = CONFIG["fib_lookback_days"]
     prompt = (
-        f"For these equity symbols: {', '.join(symbols)}, make FIVE "
+        f"For these equity symbols: {', '.join(symbols)}, make SIX "
         f"get_equity_technical_indicators calls per symbol -- interval=day, "
-        f"bounds=regular, output=latest, start_time roughly 400 calendar days "
+        f"bounds=regular, output=latest, start_time roughly 300 calendar days "
         f"before now (so the 200-day SMA has enough bars): (1) type=ema "
         f"period=10, (2) type=ema period=21, (3) type=sma period=50, (4) "
-        f"type=sma period=200, (5) type=rsi period={CONFIG['rsi_period']}. "
+        f"type=sma period=200, (5) type=rsi period={CONFIG['rsi_period']}, "
+        f"(6) type=ema period=8. "
         f"For each symbol report the latest value of each. ALSO make one "
         f"get_earnings_results call per symbol and report "
         f"upcoming_eps_estimates: the eps.estimate values of the quarters "
@@ -483,7 +484,7 @@ def _trend_signals_batch(symbols, include_volume=False):
         f"range, oldest first, as [YYYY-MM-DD, high, low] -- copy the values "
         f"exactly, do not summarize, skip or pick extremes yourself. "
         f"Reply with ONLY a JSON object mapping symbol to "
-        f'fields, no prose, shaped exactly like: {{"ABC": {{"ema10": 0.0, '
+        f'fields, no prose, shaped exactly like: {{"ABC": {{"ema8": 0.0, "ema10": 0.0, '
         f'"ema21": 0.0, "sma50": 0.0, "sma200": 0.0, "rsi": 0.0, '
         f'"bars": [["2026-01-02", 0.0, 0.0]], '
         f'"upcoming_eps_estimates": [0.0, 0.0]'
@@ -721,9 +722,32 @@ def volume_trend_gate(c):
     return None
 
 
+def ema_band_gate(c):
+    """8/21-day EMA band gate, run by --trend-analysis. Passes when price
+    sits inside the band between the two EMAs (either order, inclusive), i.e.
+    a pullback that has not lost the 21 EMA. Not part of ENTRY_GATES."""
+    price, ema8, ema21 = c["last"], c.get("ema8"), c.get("ema21")
+    if ema8 is None or ema21 is None:
+        return "8/21-day EMA unavailable"
+    lo, hi = min(ema8, ema21), max(ema8, ema21)
+    if price < lo:
+        return f"price {price:.2f} below 8/21 EMA band {lo:.2f}-{hi:.2f}"
+    if price > hi:
+        return f"price {price:.2f} above 8/21 EMA band {lo:.2f}-{hi:.2f}"
+    return None
+
+
 # Deterministic entry gates, never left to the AI, in evaluation order.
 ENTRY_GATES = (("sma", sma_gate), ("rsi", rsi_gate), ("fib", fib_gate),
                ("forward_pe", forward_pe_gate))
+
+
+# --trend-analysis runs the day-change window, every entry gate, then the
+# two opt-in gates (never applied to live entries).
+TREND_ANALYSIS_GATES = ((("daychg", lambda c: daychg_gate(c["day_change_pct"])),)
+                        + ENTRY_GATES
+                        + (("volume_trend", volume_trend_gate),
+                           ("ema_band", ema_band_gate)))
 
 
 def entry_gate(c):
@@ -746,7 +770,7 @@ def enrich_with_signals(candidates, include_volume=False):
         trend_signals = {}
     for c in candidates:
         t = trend_signals.get(c["symbol"]) or {}
-        for k in ("ema10", "ema21", "sma50", "sma200", "rsi"):
+        for k in ("ema8", "ema10", "ema21", "sma50", "sma200", "rsi"):
             v = t.get(k)
             c[k] = float(v) if v is not None else None
         swing = swing_from_bars(t.get("bars"))
@@ -1000,7 +1024,7 @@ def scan_candidates():
 
 def trend_analysis(symbols):
     """Read-only (--trend-analysis): run the day-change window, every entry
-    gate and the 10-day volume trend gate on the given symbols, and log each
+    gate and the 10-day volume trend and 8/21 EMA band gates on the given symbols, and log each
     gate's verdict with the data values. Places no orders and calls no pick
     provider."""
     quotes, err = get_quotes(symbols)
@@ -1018,25 +1042,51 @@ def trend_analysis(symbols):
     if not candidates:
         return
     enrich_with_signals(candidates, include_volume=True)
-    gates = ((("daychg", lambda c: daychg_gate(c["day_change_pct"])),)
-             + ENTRY_GATES + (("volume_trend", volume_trend_gate),))
     for c in candidates:
-        fib, fpe = c["fib"] or {}, c["fpe"] or {}
-        rnd = lambda d: json.dumps({k: round(v, 3) if isinstance(v, float) else v
-                                    for k, v in d.items()})
-        log(f"trend-analysis: {c['symbol']} last={c['last']:.2f} day={c['day_change_pct']:+.2f}% "
-            f"sma50={c['sma50']} sma200={c['sma200']} rsi={c['rsi']} trend={c['trend']} "
-            f"swing_high={c['swing_high']} swing_low={c['swing_low']} "
-            f"fib={rnd(fib)} fpe={rnd(fpe)} "
-            f"volume_momentum_pct={c['volume_momentum_pct']} obv={c['obv_trend']}")
-        failed = 0
-        for name, gate in gates:
-            reason = gate(c)
-            failed += bool(reason)
-            log(f"trend-analysis: {c['symbol']} gate {name}: "
-                + (f"FAIL -- {reason}" if reason else "pass"))
-        log(f"trend-analysis: {c['symbol']}: "
-            + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
+        report_trend_analysis(c)
+
+
+def pretty_print(c):
+    """Print every field of a trend-analysis candidate dict as a two-column
+    table. Nested dicts (fib, fpe) are expanded one row per key as
+    "parent.key"; nothing in the dict is omitted."""
+    rows = []
+
+    def add(key, val):
+        if isinstance(val, dict):
+            if not val:
+                rows.append((key, "-"))
+            for k, v in val.items():
+                add(f"{key}.{k}", v)
+        elif val is None:
+            rows.append((key, "n/a"))
+        elif isinstance(val, float):
+            rows.append((key, f"{val:+.3f}" if key.endswith("_pct") else f"{val:.3f}"))
+        else:
+            rows.append((key, str(val)))
+
+    for k, v in c.items():
+        add(k, v)
+    kw = max(len("field"), *(len(k) for k, _ in rows))
+    vw = max(len("value"), *(len(v) for _, v in rows))
+    sep = f"+-{'-' * kw}-+-{'-' * vw}-+"
+    lines = [sep, f"| {'field':<{kw}} | {'value':<{vw}} |", sep]
+    lines += [f"| {k:<{kw}} | {v:<{vw}} |" for k, v in rows]
+    lines.append(sep)
+    print(f"trend-analysis: {c['symbol']}\n" + "\n".join(lines), flush=True)
+
+
+def report_trend_analysis(c):
+    """Show one candidate's data values (via pretty_print) and every gate's verdict."""
+    pretty_print(c)
+    failed = 0
+    for name, gate in TREND_ANALYSIS_GATES:
+        reason = gate(c)
+        failed += bool(reason)
+        log(f"trend-analysis: {c['symbol']} gate {name}: "
+            + (f"FAIL -- {reason}" if reason else "pass"))
+    log(f"trend-analysis: {c['symbol']}: "
+        + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
 
 
 # ============================================================================
