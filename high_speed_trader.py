@@ -130,8 +130,8 @@ CONFIG = {
     # names are momentum-long (bull), down names are dip-buy (bear); names
     # outside the window are excluded as one-day outliers (e.g. halt/news-
     # driven moves) rather than fed to the pick step.
-    "candidate_min_daychg": -8.0,
-    "candidate_max_daychg": 8.0,
+    "candidate_min_daychg": -10.0,
+    "candidate_max_daychg": 10.0,
 
     # ----- entry gates (deterministic, applied after the trend lookup) -----
     # Price must be above the 200-day SMA, or between the 50-day and 200-day
@@ -169,8 +169,8 @@ CONFIG = {
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
     "min_trade_usd": 25.0,          # skip an entry too small to matter
     "conviction_accept": ["high", "medium"],
-    "take_profit_pct": 8.0,         # sell if price is up MORE than this percent from entry
-    "stop_loss_pct": 8.0,           # sell if price is down this percent or more from entry
+    "take_profit_pct": 10.0,         # sell if price is up MORE than this percent from entry
+    "stop_loss_pct": 10.0,           # sell if price is down this percent or more from entry
     "close_out_minutes_before_close": 15,  # flatten everything this close to the bell
 
     # ----- loop -----
@@ -423,9 +423,9 @@ def get_volume_momentum(symbols):
     prompt = (
         f"For these equity symbols: {', '.join(symbols)}, make BOTH calls: "
         + VOLUME_CLAUSE +
-        f"Reply with ONLY a JSON object mapping symbol to fields, no prose, "
-        f'shaped exactly like: {{"ABC": {{"volume_momentum_pct": 0.0, '
-        f'"obv_trend": "rising"}}}}.'
+        "Reply with ONLY a JSON object mapping symbol to fields, no prose, "
+        'shaped exactly like: {"ABC": {"volume_momentum_pct": 0.0, '
+        '"obv_trend": "rising"}}.'
     )
     res = claude_json(prompt, allowed_tools=mcp_tools(
         "get_equity_historicals", "get_equity_technical_indicators"))
@@ -748,6 +748,38 @@ TREND_ANALYSIS_GATES = ((("daychg", lambda c: daychg_gate(c["day_change_pct"])),
                         + ENTRY_GATES
                         + (("volume_trend", volume_trend_gate),
                            ("ema_band", ema_band_gate)))
+
+
+def _sma_pass(c):
+    price, sma50, sma200 = c["last"], c.get("sma50"), c["sma200"]
+    if price > sma200:
+        return f"price {price:.2f} above 200sma {sma200:.2f}"
+    return f"price {price:.2f} between 200sma {sma200:.2f} and 50sma {sma50:.2f}"
+
+
+def _fib_pass(c):
+    lo_r, hi_r = CONFIG["fib_zone"]
+    fib = c["fib"]
+    return (f"price {c['last']:.2f} at {fib['ratio']:.3f} retracement of {fib['swing']}swing, "
+            f"inside {lo_r}-{hi_r} zone ({fib['zone_low']:.2f}-{fib['zone_high']:.2f})")
+
+
+# Pass-side counterpart of each gate's rejection text: the value and the
+# range it was checked against. Only called for gates that returned None.
+GATE_PASS_DETAIL = {
+    "daychg": lambda c: (f"day change {c['day_change_pct']:+.2f}% within "
+                         f"{CONFIG['candidate_min_daychg']:+.1f}%..{CONFIG['candidate_max_daychg']:+.1f}% window"),
+    "sma": _sma_pass,
+    "rsi": lambda c: (f"RSI {c['rsi']:.1f} within "
+                      f"{CONFIG['rsi_min']:.0f}..{CONFIG['rsi_max']:.0f}"),
+    "fib": _fib_pass,
+    "forward_pe": lambda c: (f"forward P/E {c['fpe']['forward_pe']:.1f} below "
+                             f"{CONFIG['forward_pe_max']:.0f}"),
+    "volume_trend": lambda c: (f"10-day volume trend {c['volume_momentum_pct']:+.1f}% at/above "
+                               f"{CONFIG['volume_trend_min_pct']:+.1f}%, OBV {c.get('obv_trend')}"),
+    "ema_band": lambda c: (f"price {c['last']:.2f} inside 8/21 EMA band "
+                           f"{min(c['ema8'], c['ema21']):.2f}-{max(c['ema8'], c['ema21']):.2f}"),
+}
 
 
 def entry_gate(c):
@@ -1084,7 +1116,8 @@ def report_trend_analysis(c):
         reason = gate(c)
         failed += bool(reason)
         log(f"trend-analysis: {c['symbol']} gate {name}: "
-            + (f"FAIL -- {reason}" if reason else "pass"))
+            + (f"FAIL -- {reason}" if reason
+               else f"pass -- {GATE_PASS_DETAIL[name](c)}"))
     log(f"trend-analysis: {c['symbol']}: "
         + (f"REJECT -- {failed} gate(s) failed" if failed else "PASS"))
 
