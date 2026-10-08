@@ -3,7 +3,7 @@
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 
 A stateless, high-speed, **equity-only** intraday trading bot for a Robinhood
-account. Every tick reads live broker state, applies a +8%/-8%
+account. Every tick reads live broker state, applies a +10%/-10%
 take-profit/stop-loss, and lets an AI (Claude or OpenAI) pick what to buy next — nothing
 is cached or saved between ticks. See [`SKILLS.md`](SKILLS.md) for the rules
 and [`docs/design.md`](docs/design.md) for how it's built.
@@ -249,7 +249,7 @@ ever runs during the regular session.
 1. Skip the tick if it's outside regular exchange hours (or the weekend).
 2. Pull a fresh account snapshot (cash + open positions + current prices) —
    nothing is reused from a prior tick.
-3. Sell any position that's up more than 8% or down 8% or more from its average cost, or
+3. Sell any position that's up more than 10% or down 10% or more from its average cost, or
    flatten everything if the close is near. Winners are never force-sold.
 4. Otherwise, quote the seed universe and filter to day-change movers
    (names whose day change is between `candidate_min_daychg` and
@@ -438,3 +438,12 @@ This bot is equity-only and never calls any option tool — see
       [Robinhood MCP tool reference](#robinhood-mcp-tool-reference) above).
 - [ ] Started with a small `deploy_fraction` and a small account balance.
 - [ ] Only then set `ENABLE_LIVE_TRADE=True` in `.env`.
+
+## Tests
+
+Each OpenSpec requirement in `openspec/changes/` has offline tests (no broker or AI calls):
+
+```
+pip install -r requirements-dev.txt
+pytest -q
+```

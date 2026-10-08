@@ -18,11 +18,14 @@ runs.
   5. Sleep until the next tick.
 - **Unlimited trades**: there is no cap on how many trades happen in a
   session. Enter and exit as many times as the rules trigger.
-- **Stop-loss**: if an open position's equity price has dropped 8% or more from
+- **Stop-loss**: if an open position's equity price has dropped 10% or more from
   its entry price, sell the full position immediately. This is a hard,
   non-negotiable exit — don't wait for confirmation.
-- **Take-profit**: if an open position is up more than 8% from its entry
+- **Take-profit**: if an open position is up more than 10% from its entry
   price, sell the full position.
+- **Master switch**: no buy or sell order is placed unless live trading is
+  explicitly enabled (`ENABLE_LIVE_TRADE`, off by default). `--simulation`
+  always forces it off.
 
 ## Stock Selection Logic
 
@@ -41,12 +44,14 @@ runs.
   maximum is treated as a one-day outlier (e.g. a halt or news-driven spike)
   rather than real continuation, and is excluded from the pick step
   entirely.
-- A single day's price move isn't enough: each candidate also carries its
-  trailing 5-day volume trend (mean volume over the last 5 trading days vs.
+- A single day's price move isn't enough: each candidate is also scored on
+  its trailing 5-day volume trend (mean volume over the last 5 trading days vs.
   the 5 trading days before that) and On-Balance-Volume trend over the same
   window, pulled from historicals rather than one day's number. A big
   day-change on flat or falling 5-day volume reads as a one-day spike; a
-  rising 5-day volume trend with rising OBV reads as sustained interest.
+  rising 5-day volume trend with rising OBV reads as sustained interest. The
+  volume trend informs the pick and the `--trend-analysis` report only; it is
+  never a hard entry gate.
 - Each candidate also carries a longer-term bull/bear trend read, classified
   deterministically (not by the AI) from daily moving averages: bullish is
   the 10-day EMA above the 21-day EMA with price holding both the 50-day and
@@ -54,6 +59,22 @@ runs.
   anything else is neutral. A momentum long against a bearish trend, or a
   dip-buy in one, should be weighted down hard -- it's more likely a
   short-lived bounce or a falling knife than a real setup.
+
+## Entry Gates
+
+Deterministic checks (not the AI) a candidate must clear before a buy:
+
+- Price above the 200-day SMA, or between the 50-day and 200-day SMA.
+- 14-period RSI above 30 and at most 70.
+- Price inside the 0.382-0.764 Fibonacci retracement zone of the last swing
+  (a truncated history rejects).
+- Forward P/E positive and below 90 (zero/negative forward EPS rejects).
+- Pick decision is buy with high or medium conviction, the symbol isn't
+  already held, and the order (25% of settled cash) meets the minimum size.
+- The broker confirms the symbol is a tradable equity.
+
+`--trend-analysis` additionally reports the 10-day volume/OBV gate and the
+8/21-day EMA band; neither affects live entries.
 
 ## Instrument Scope
 
@@ -78,7 +99,8 @@ runs.
 ## State
 
 - No state is stored. No local files, database, or in-memory cache of
-  positions, entry prices, or timestamps.
+  positions, entry prices, or timestamps. (A write-only human activity log
+  is allowed; it is never read back to make decisions.)
 - Every tick treats the broker's live state as the sole source of truth —
   fetch positions, quotes, and account data fresh each time. The process can
   be stopped and restarted at any point with nothing to reload or reconcile.

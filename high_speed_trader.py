@@ -5,8 +5,8 @@ high_speed_trader.py
 A stateless, high-speed, EQUITY-ONLY intraday trading loop for a Robinhood
 account, built to the rules in SKILLS.md:
   - Unlimited trades per session, on a fast fixed-interval tick loop.
-  - Exit rule: sell a position once it is up more than 8% (take-profit)
-    or down 8% or more (stop-loss) from its entry (average buy price).
+  - Exit rule: sell a position once it is up more than 10% (take-profit)
+    or down 10% or more (stop-loss) from its entry (average buy price).
   - Stock/equity instrument only. No options.
   - One seed universe, watched for both momentum-long (bull) and dip-buy
     (bear) setups, is a guideline, not a boundary -- the AI may propose any
@@ -877,10 +877,10 @@ def build_pick_prompt(candidates):
         "dip-buy still in a bullish trend is a much safer pullback-to-support "
         "case. "
         "Every name listed has already passed hard filters: price above the "
-        "200-day SMA or between the 50-day and 200-day SMA, RSI between 30 and 70 (not oversold, not overbought), "
-        "price sitting in the 0.5-0.764 Fibonacci retracement zone of "
+        f"200-day SMA or between the 50-day and 200-day SMA, RSI between {CONFIG['rsi_min']:g} and {CONFIG['rsi_max']:g} (not oversold, not overbought), "
+        f"price sitting in the {CONFIG['fib_zone'][0]:g}-{CONFIG['fib_zone'][1]:g} Fibonacci retracement zone of "
         "its last swing high/low -- a classic pullback-entry zone -- and a "
-        "positive forward P/E below 50. "
+        f"positive forward P/E below {CONFIG['forward_pe_max']:g}. "
         "Names marked \"momentum long\" are up "
         "on the day and the case is continuation. Names marked \"dip-buy\" are "
         "down hard (more than the configured drop threshold) and the case is a "

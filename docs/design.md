@@ -7,7 +7,7 @@ trading loop for a Robinhood account. It implements the rules defined in
 ## Goals (from SKILLS.md)
 
 - Unlimited trades per session, evaluated on a fast, fixed-interval tick.
-- Exit a position once it is up more than 8% or down 8% or more from its
+- Exit a position once it is up more than 10% or down 10% or more from its
   entry price.
 - Equity/stock instrument only. No options, futures, or other derivatives.
 - A seed universe is a guideline, not a boundary.
@@ -31,7 +31,7 @@ flowchart TD
         B -- yes --> C[get_account_snapshot<br/>cash + open positions + current prices]
         C --> D{approaching_close?}
         D -- yes --> E[manage_positions:<br/>flatten everything]
-        D -- no --> F[manage_positions:<br/>+8% / -8% check per position]
+        D -- no --> F[manage_positions:<br/>+10% / -10% check per position]
         E --> G
         F --> G{approaching_close?}
         G -- yes --> Z2[skip new entries]
@@ -88,7 +88,7 @@ flowchart TD
   call to the OpenAI chat completions endpoint). Either path returns a
   symbol/conviction/reason JSON blob and nothing else — it cannot place
   orders or read the account directly.
-- **Risk math**: sizing (`deploy_fraction` of settled cash), the +8%/-8%
+- **Risk math**: sizing (`deploy_fraction` of settled cash), the +10%/-10%
   take-profit/stop-loss, the close-out guard, and the conviction gate are all plain
   deterministic Python in `manage_positions` / `maybe_enter`. The AI only
   ever answers "what to buy."
