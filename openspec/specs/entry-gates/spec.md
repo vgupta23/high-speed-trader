@@ -74,3 +74,14 @@ The trend-analysis report SHALL additionally evaluate whether price sits inside 
 #### Scenario: Inside band
 - **WHEN** price lies between EMA8 and EMA21 inclusive
 - **THEN** the EMA band check passes in the report only
+
+### Requirement: Gamma king gate
+The gate SHALL apply only in the --trend-analysis report, never to live entries or the AI pick. A candidate SHALL pass only if its price is within 30% of both the long gamma king (the strike with the largest positive net gamma exposure) and the short gamma king (the strike with the largest negative net gamma exposure), computed from the nearest two option expirations, for bull and bear candidates alike. Missing option data or a missing king SHALL fail. Both kings and the gamma flip price (where cumulative net GEX by strike crosses zero) SHALL be included in the --trend-analysis report, and gamma data SHALL NOT be fetched or included in the AI pick prompt.
+
+#### Scenario: Both kings within range
+- **WHEN** price is 100, long king 120 and short king 80
+- **THEN** the gate passes
+
+#### Scenario: A king too far away
+- **WHEN** price is 100 and the long king is 140
+- **THEN** the gate fails

@@ -47,6 +47,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 
@@ -77,7 +78,7 @@ load_dotenv()
 # ============================================================================
 # CONFIG
 # ============================================================================
-CONFIG = {
+CONFIG: dict[str, Any] = {
     # The agentic-enabled Robinhood account the bot trades. Ask Claude
     # "list my robinhood accounts" once the MCP is authorized, and put your
     # own account number here -- never commit a real one.
@@ -115,15 +116,22 @@ CONFIG = {
     "universe": [
         "AAOI", "AEHR", "ALAB", "AMAT", "AMD", "AMZN", "APLD", "APP",
         "ASTS", "AVAV", "AVGO", "AXTI", "BE", "BKSY", "BOT", "CAT",
-        "CEG", "CIEN", "CIFR", "COHR", "CRDO", "EOSE", "FLY", "FORM",
-        "FPS", "FTAI", "GEV", "GLW", "GOOGL", "HUT", "INTC", "IONQ",
-        "IPGP", "IREN", "ISRG", "KLAR", "LITE", "LMND", "LMT", "LRCX",
-        "MDB", "META", "MOD", "MRVL", "MSFT", "MU", "MXL", "NVDA",
-        "NVTS", "OKLO", "ON", "OUST", "PANW", "PENG", "PGY", "PURR",
-        "QNT", "RGTI", "RKLB", "ROK", "RTX", "RVII", "SMCI", "SMTC",
-        "SNDK", "SOFI", "SOLS", "SPCX", "TREE", "TSLA", "UBER", "VELO",
-        "VIAV", "VICR", "VPG", "VRT", "VSAT", "VST", "WULF", "WYFI",
-        "XYZ", "ZS",
+        "CEG", "CIEN", "CIFR", "COHR", "CRDO", "EOSE", "ET", "ETN","FLY",
+        "FORM", "FPS", "FTAI", "GEV", "GLW", "GOOGL", "HUT", "INTC",
+        "IONQ", "IPGP", "IREN", "ISRG", "KLAR", "LITE", "LMND", "LMT",
+        "LRCX", "MDB", "META", "MOD", "MRVL", "MSFT", "MU", "MXL",
+        "NVDA", "NVTS", "OKLO", "ON", "OUST", "PANW", "PENG", "PGY",
+        "PURR", "QNT", "RGTI", "RKLB", "ROK", "RTX", "RVII", "SMCI",
+        "SMTC", "SNDK", "SOFI", "SOLS", "SPCX", "TREE", "TSLA", "UBER",
+        "VELO", "VIAV", "VICR", "VPG", "VRT", "VSAT", "VST", "WULF",
+        "WYFI", "XYZ", "ZS",
+    ],
+    "mini_universe": [
+        "AEHR", "ALAB", "AMZN", "AVAV", "AXTI", "BKSY", "BOT", "COHR",
+        "ET", "FIX", "FLY", "FORM", "FTAI", "GLW", "GOOG", "IONQ",
+        "IPGP", "ISRG", "LITE", "META", "MOD", "MXL", "NVTS", "OKLO",
+        "ON", "OUST", "PENG", "PURR", "RGTI", "RKLB", "RVII", "TREE",
+        "VELO", "VIAV", "VICR", "VSAT", "XYZ",
     ],
     # Day-change window for a universe name to become a candidate: between
     # candidate_min_daychg and candidate_max_daychg percent, inclusive. Up
@@ -151,8 +159,8 @@ CONFIG = {
     # (highest high / lowest low over fib_lookback_days calendar days).
     # Upswing (low came first): retracement measured down from the high.
     # Downswing (high came first): retracement measured up from the low.
-    "fib_lookback_days": 119,
-    # Fewer daily bars than this (180 calendar days is ~85 trading days) means
+    "fib_lookback_days": 126,
+    # Fewer daily bars than this (126 calendar days or 18 weeks,is ~85 trading days) means
     # the history came back truncated, so the swing is rejected as unavailable.
     "fib_min_bars": 75,
     # 0.618 is the golden ratio the zone is centred on; the report shows how
@@ -164,6 +172,16 @@ CONFIG = {
     # quarters not yet reported); when fewer than four are published, their
     # mean is annualized (x4). Zero or negative forward EPS rejects.
     "forward_pe_max": 90.0,
+    # Gamma-king gate: price must sit within gamma_king_max_dist_pct percent
+    # of BOTH the long gamma king (strike with the largest positive net GEX)
+    # and the short gamma king (largest negative net GEX), bull or bear alike.
+    # GEX per strike = (call gamma*OI - put gamma*OI) * 100 * price, summed
+    # over the nearest gamma_expirations expirations, strikes within
+    # gamma_strike_band_pct percent of price.
+    "gamma_king_max_dist_pct": 30.0,
+    "gamma_expirations": 2,
+    "gamma_strike_band_pct": 35.0,
+    "gamma_batch_size": 2,
 
     # ----- sizing / risk (deterministic, never touched by the AI) -----
     "deploy_fraction": 0.25,        # fraction of settled cash per new entry
@@ -234,7 +252,7 @@ def notify(text):
 # ============================================================================
 # Small JSON / HTTP helpers
 # ============================================================================
-def extract_json(text):
+def extract_json(text) -> dict:
     if not text:
         return {"error": "empty model output"}
     cleaned = text.replace("```json", "").replace("```", "").strip()
@@ -304,7 +322,7 @@ def claude_cli(prompt, allowed_tools=None, timeout=None):
     return (proc.stdout or "").strip()
 
 
-def claude_json(prompt, allowed_tools=None, timeout=None):
+def claude_json(prompt, allowed_tools=None, timeout=None) -> dict:
     return extract_json(claude_cli(prompt, allowed_tools, timeout))
 
 
@@ -342,14 +360,16 @@ def get_account_snapshot():
     if "error" in positions_res:
         return None, f"equity positions lookup failed: {positions_res['error']}"
 
-    positions = [p for p in (positions_res.get("positions") or []) if valid_stock_position(p)]
+    positions: list[dict] = [
+        p for p in (positions_res.get("positions") or []) if valid_stock_position(p)
+    ]
     if positions:
         symbols = [p["symbol"] for p in positions]
         quotes, err = get_quotes(symbols)
-        if err:
-            return None, f"quote lookup failed for held positions: {err}"
+        if err or quotes is None:
+            return None, f"quote lookup failed for held positions: {err or 'no response'}"
         for p in positions:
-            q = quotes.get(p["symbol"]) or {}
+            q = (quotes or {}).get(p["symbol"]) or {}
             last = q.get("last")
             if last is None:
                 return None, f"no current price for held position {p['symbol']}"
@@ -451,8 +471,8 @@ def get_trend_signals(symbols, include_volume=False):
     merged, errors = {}, []
     with ThreadPoolExecutor(max_workers=CONFIG["trend_max_workers"]) as pool:
         for batch, (res, err) in zip(batches, pool.map(lambda b: _trend_signals_batch(b, include_volume), batches)):
-            if err:
-                errors.append(f"{','.join(batch)}: {err}")
+            if err or res is None:
+                errors.append(f"{','.join(batch)}: {err or 'no response'}")
             else:
                 merged.update(res)
     if errors:
@@ -502,6 +522,91 @@ def _trend_signals_batch(symbols, include_volume=False):
     if "error" in res:
         return None, res["error"]
     return res, None
+
+
+def get_gamma_rows(symbols):
+    """Raw option rows per symbol for the gamma-king calc: [strike, "call"|
+    "put", gamma, open_interest] for the nearest CONFIG["gamma_expirations"]
+    expirations. The model only copies the numbers; the king strikes are
+    computed in Python (see gamma_kings). Batches run in parallel."""
+    size = max(1, CONFIG["gamma_batch_size"])
+    batches = [symbols[k:k + size] for k in range(0, len(symbols), size)]
+
+    def one(batch):
+        prompt = (
+            f"For these equity symbols: {', '.join(batch)}, find the option "
+            f"data for the nearest {CONFIG['gamma_expirations']} upcoming "
+            f"expirations: use get_option_chains for the expiration dates, "
+            f"get_option_instruments for the active contracts (calls and puts), "
+            f"then get_option_quotes (at most 20 instrument ids per call) for "
+            f"each contract. Only include strikes within "
+            f"{CONFIG['gamma_strike_band_pct']:g}% of the stock's last price. "
+            f"For each symbol report rows: EVERY such contract as "
+            f'[strike, "call" or "put", gamma, open_interest] -- copy the values '
+            f"exactly, use 0 for a missing gamma or open interest, do not "
+            f"summarize or compute anything. Reply with ONLY a JSON object "
+            f'mapping symbol to {{"rows": [[100.0, "call", 0.02, 1500]]}}, no prose.'
+        )
+        return claude_json(prompt, allowed_tools=mcp_tools(
+            "get_option_chains", "get_option_instruments", "get_option_quotes"))
+
+    merged, errors = {}, []
+    with ThreadPoolExecutor(max_workers=CONFIG["trend_max_workers"]) as pool:
+        for batch, res in zip(batches, pool.map(one, batches)):
+            if "error" in res:
+                errors.append(f"{','.join(batch)}: {res['error']}")
+            else:
+                merged.update(res)
+    if errors:
+        log(f"scan: gamma batches failed: {'; '.join(errors)}")
+    return merged
+
+
+def _gamma_flip(gex):
+    """Gamma flip price: where cumulative net GEX, summed from the lowest
+    strike upward, crosses zero (linearly interpolated between the two
+    strikes). None if it never changes sign."""
+    cum, prev_k, prev_cum = 0.0, None, None
+    for k in sorted(gex):
+        cum += gex[k]
+        if prev_cum is not None and prev_cum != cum and (prev_cum < 0) != (cum < 0):
+            return prev_k + (k - prev_k) * (0 - prev_cum) / (cum - prev_cum)
+        if cum == 0:
+            return k
+        prev_k, prev_cum = k, cum
+    return None
+
+
+def gamma_kings(price, rows):
+    """Deterministic gamma kings from option rows ([strike, type, gamma, OI]).
+    Net GEX per strike = (call gamma*OI - put gamma*OI) * 100 * price. Returns
+    {"flip" (gamma flip price), "long_king", "long_gex", "long_oi_call", "long_oi_put", "short_king",
+    "short_gex", "short_oi_call", "short_oi_put"}: the strikes with the
+    largest positive and most negative net GEX (None if no strike has that
+    sign) and the call/put open interest at each, or None if the rows are missing or unusable."""
+    if price is None:
+        return None
+    gex: dict[float, float] = {}
+    oi_at: dict[float, dict[str, float]] = {}
+    try:
+        for strike, kind, gamma, oi in rows or []:
+            sign = 1 if str(kind).lower() == "call" else -1
+            k = float(strike)
+            oi_at.setdefault(k, {"call": 0.0, "put": 0.0})["call" if sign > 0 else "put"] += float(oi or 0)
+            gex[k] = gex.get(k, 0.0) + sign * float(gamma or 0) * float(oi or 0) * 100 * price
+    except (TypeError, ValueError):
+        return None
+    if not gex:
+        return None
+    long_k = max(gex, key=lambda k: gex[k])
+    short_k = min(gex, key=lambda k: gex[k])
+    out = {"flip": _gamma_flip(gex)}
+    for label, k, ok in (("long", long_k, gex[long_k] > 0), ("short", short_k, gex[short_k] < 0)):
+        out[f"{label}_king"] = k if ok else None
+        out[f"{label}_gex"] = gex[k] if ok else None
+        out[f"{label}_oi_call"] = oi_at[k]["call"] if ok else None
+        out[f"{label}_oi_put"] = oi_at[k]["put"] if ok else None
+    return out
 
 
 def classify_trend(price, ema10, ema21, sma50, sma200):
@@ -737,16 +842,47 @@ def ema_band_gate(c):
     return None
 
 
+def _king_dist_pct(price, king):
+    return abs(price - king) / price * 100
+
+
+def _oi_text(g, label):
+    call, put = g.get(f"{label}_oi_call") or 0, g.get(f"{label}_oi_put") or 0
+    return f"{call + put:,.0f} (calls {call:,.0f} / puts {put:,.0f})"
+
+
+def _flip_text(g):
+    flip = g.get("flip")
+    return f"{flip:.2f}" if flip is not None else "n/a"
+
+
+def gamma_king_gate(c):
+    """Price must be within gamma_king_max_dist_pct of both the long and the
+    short gamma king. Missing option data rejects."""
+    price, g, cap = c["last"], c.get("gamma"), CONFIG["gamma_king_max_dist_pct"]
+    if g is None:
+        return "gamma king data unavailable"
+    for label in ("long", "short"):
+        king = g.get(f"{label}_king")
+        if king is None:
+            return f"no {label} gamma king"
+        d = _king_dist_pct(price, king)
+        if d > cap:
+            return f"price {price:.2f} is {d:.1f}% from {label} gamma king {king:.2f} (max {cap:g}%)"
+    return None
+
+
 # Deterministic entry gates, never left to the AI, in evaluation order.
 ENTRY_GATES = (("sma", sma_gate), ("rsi", rsi_gate), ("fib", fib_gate),
                ("forward_pe", forward_pe_gate))
 
 
 # --trend-analysis runs the day-change window, every entry gate, then the
-# two opt-in gates (never applied to live entries).
+# three opt-in gates (never applied to live entries or the AI pick).
 TREND_ANALYSIS_GATES = ((("daychg", lambda c: daychg_gate(c["day_change_pct"])),)
                         + ENTRY_GATES
-                        + (("volume_trend", volume_trend_gate),
+                        + (("gamma_king", gamma_king_gate),
+                           ("volume_trend", volume_trend_gate),
                            ("ema_band", ema_band_gate)))
 
 
@@ -775,6 +911,13 @@ GATE_PASS_DETAIL = {
     "fib": _fib_pass,
     "forward_pe": lambda c: (f"forward P/E {c['fpe']['forward_pe']:.1f} below "
                              f"{CONFIG['forward_pe_max']:.0f}"),
+    "gamma_king": lambda c: (
+        f"price {c['last']:.2f} within {CONFIG['gamma_king_max_dist_pct']:g}% of long gamma king "
+        f"{c['gamma']['long_king']:.2f} ({_king_dist_pct(c['last'], c['gamma']['long_king']):.1f}%, "
+        f"OI {_oi_text(c['gamma'], 'long')}) "
+        f"and short gamma king {c['gamma']['short_king']:.2f} "
+        f"({_king_dist_pct(c['last'], c['gamma']['short_king']):.1f}%, "
+        f"OI {_oi_text(c['gamma'], 'short')}); gamma flip {_flip_text(c['gamma'])}"),
     "volume_trend": lambda c: (f"10-day volume trend {c['volume_momentum_pct']:+.1f}% at/above "
                                f"{CONFIG['volume_trend_min_pct']:+.1f}%, OBV {c.get('obv_trend')}"),
     "ema_band": lambda c: (f"price {c['last']:.2f} inside 8/21 EMA band "
@@ -792,14 +935,16 @@ def entry_gate(c):
     return None
 
 
-def enrich_with_signals(candidates, include_volume=False):
+def enrich_with_signals(candidates, include_volume=False, include_gamma=False):
     """Attach trend/RSI/Fibonacci signals to each candidate in place. With
     include_volume, also attach volume_momentum_pct and obv_trend from the
-    same model call."""
+    same model call. With include_gamma, also attach the gamma kings and flip
+    price (--trend-analysis only; not used by the AI pick)."""
     trend_signals, err = get_trend_signals([c["symbol"] for c in candidates], include_volume)
-    if err:
+    if err or trend_signals is None:
         log(f"scan: trend signal lookup failed: {err}")
         trend_signals = {}
+    gamma_rows = get_gamma_rows([c["symbol"] for c in candidates]) if include_gamma else {}
     for c in candidates:
         t = trend_signals.get(c["symbol"]) or {}
         for k in ("ema8", "ema10", "ema21", "sma50", "sma200", "rsi"):
@@ -811,6 +956,8 @@ def enrich_with_signals(candidates, include_volume=False):
         c["fib"] = fib_retracement(c["last"], c["swing_high"], hi_date,
                                    c["swing_low"], lo_date)
         c["fpe"] = forward_pe(c["last"], t.get("upcoming_eps_estimates"))
+        if include_gamma:
+            c["gamma"] = gamma_kings(c["last"], (gamma_rows.get(c["symbol"]) or {}).get("rows"))
         if include_volume:
             c["volume_momentum_pct"] = t.get("volume_momentum_pct")
             c["obv_trend"] = t.get("obv_trend")
@@ -1001,7 +1148,7 @@ def manage_positions(snapshot, approaching_close):
 
         notify(f"{symbol}: selling all {quantity} shares at ~{current:.2f} ({reason}).")
         fill, err = place_sell_all(symbol, quantity)
-        if err:
+        if err or fill is None:
             notify(f"{symbol}: SELL FAILED/SKIPPED: {err}.")
             continue
         proceeds = float(fill["avg_price"]) * float(fill["quantity"])
@@ -1021,8 +1168,8 @@ def scan_candidates():
         return [], None
 
     quotes, err = get_quotes(universe)
-    if err:
-        return None, err
+    if err or quotes is None:
+        return None, err or "no response"
 
     candidates = []
     for sym in universe:
@@ -1060,8 +1207,8 @@ def trend_analysis(symbols):
     gate's verdict with the data values. Places no orders and calls no pick
     provider."""
     quotes, err = get_quotes(symbols)
-    if err:
-        log(f"trend-analysis: quotes failed: {err}")
+    if err or quotes is None:
+        log(f"trend-analysis: quotes failed: {err or 'no response'}")
         return
     candidates = []
     for sym in symbols:
@@ -1073,7 +1220,7 @@ def trend_analysis(symbols):
                            "day_change_pct": float(q.get("day_change_pct") or 0.0)})
     if not candidates:
         return
-    enrich_with_signals(candidates, include_volume=True)
+    enrich_with_signals(candidates, include_volume=True, include_gamma=True)
     for c in candidates:
         report_trend_analysis(c)
 
@@ -1143,8 +1290,8 @@ def maybe_enter(snapshot):
         return
 
     pick, err = pick_name(candidates)
-    if err:
-        log(f"entry: pick failed: {err}")
+    if err or pick is None:
+        log(f"entry: pick failed: {err or 'no response'}")
         return
     if pick.get("decision") != "buy":
         log(f"entry: pass -- {pick.get('reason', 'no reason given')}")
@@ -1175,7 +1322,7 @@ def maybe_enter(snapshot):
     notify(f"Entering {symbol} ({conviction} conviction): {pick.get('reason', '')}. "
            f"Deploying {dollars:.2f}.")
     fill, err = place_buy(symbol, dollars)
-    if err:
+    if err or fill is None:
         notify(f"{symbol}: BUY FAILED/SKIPPED: {err}.")
         return
     notify(f"{symbol}: filled {fill['quantity']} at {float(fill['avg_price']):.2f}. "

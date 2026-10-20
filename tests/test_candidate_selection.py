@@ -16,7 +16,7 @@ def test_scan_tags_and_excludes(monkeypatch):
         "UP": {"day_change_pct": 3, "last": 10},
         "DN": {"day_change_pct": -4, "last": 10},
         "BIG": {"day_change_pct": 25, "last": 10}}, None))
-    monkeypatch.setattr(hst, "enrich_with_signals", lambda c, include_volume=False: None)
+    monkeypatch.setattr(hst, "enrich_with_signals", lambda c, include_volume=False, include_gamma=False: None)
     monkeypatch.setattr(hst, "entry_gate", lambda c: None)
     cands, err = hst.scan_candidates()
     tags = {c["symbol"]: c["bull_or_bear"] for c in cands}
@@ -58,3 +58,5 @@ def test_volume_gate_spike_on_falling_obv_fails():
 def test_volume_gate_not_in_live_entry_gates():
     assert "volume_trend" not in dict(hst.ENTRY_GATES)
     assert "ema_band" not in dict(hst.ENTRY_GATES)
+    assert "gamma_king" not in dict(hst.ENTRY_GATES)
+    assert "gamma_king" in dict(hst.TREND_ANALYSIS_GATES)

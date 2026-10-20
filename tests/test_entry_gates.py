@@ -6,6 +6,10 @@ import pytest
 import high_speed_trader as hst
 
 
+def _record(buys, item):
+    buys.append(item)
+
+
 def test_sma_above_200():
     assert hst.sma_gate({"last": 100, "sma50": 90, "sma200": 80}) is None
 
@@ -71,11 +75,11 @@ def test_ema_band():
 # ---- conviction and sizing (maybe_enter) ----
 @pytest.fixture
 def enter(monkeypatch):
-    buys = []
+    buys: list = []
     monkeypatch.setattr(hst, "scan_candidates", lambda: ([{"symbol": "AAA"}], None))
     monkeypatch.setattr(hst, "is_tradable_equity", lambda s: True)
     monkeypatch.setattr(hst, "place_buy",
-                        lambda s, d: (buys.append((s, d)) or {"quantity": 1, "avg_price": 1}, None))
+                        lambda s, d: (_record(buys, (s, d)) or {"quantity": 1, "avg_price": 1}, None))
 
     def run(pick, cash=1000.0, held=()):
         monkeypatch.setattr(hst, "pick_name", lambda c: (pick, None))
@@ -102,3 +106,46 @@ def test_already_held_no_order(enter):
 
 def test_too_little_cash_no_order(enter):
     assert enter(buy(), cash=50.0) == []
+
+
+def test_gamma_kings_from_rows():
+    rows = [[100, "call", 0.05, 1000], [100, "put", 0.05, 200],
+            [90, "put", 0.04, 2000], [90, "call", 0.01, 100]]
+    g = hst.gamma_kings(100.0, rows)
+    assert g["long_king"] == 100.0 and g["short_king"] == 90.0
+    assert g["flip"] is None  # cumulative net GEX never turns positive
+
+
+def test_gamma_flip_interpolated_between_strikes():
+    rows = [[90, "put", 0.01, 1000], [100, "call", 0.03, 1000]]  # cum -10, then +20
+    assert hst.gamma_kings(1.0, rows)["flip"] == pytest.approx(90 + 10 * 10 / 30)
+
+
+def test_gamma_flip_none_without_sign_change():
+    assert hst.gamma_kings(100.0, [[100, "call", 0.05, 1000]])["flip"] is None
+
+
+def test_ai_pick_prompt_has_no_gamma():
+    c = {"symbol": "AAA", "day_change_pct": 1.0, "last": 10.0, "bull_or_bear": "bull",
+         "gamma": {"long_king": 11.0, "short_king": 9.0}}
+    assert "gamma" not in hst.build_pick_prompt([c]).lower()
+
+
+def test_gamma_kings_missing_rows():
+    assert hst.gamma_kings(100.0, []) is None
+    assert hst.gamma_kings(100.0, None) is None
+
+
+def test_gamma_king_gate_within_range():
+    c = {"last": 100.0, "gamma": {"long_king": 120.0, "short_king": 80.0}}
+    assert hst.gamma_king_gate(c) is None
+
+
+def test_gamma_king_gate_too_far_fails():
+    assert hst.gamma_king_gate({"last": 100.0, "gamma": {"long_king": 140.0, "short_king": 90.0}})
+    assert hst.gamma_king_gate({"last": 100.0, "gamma": {"long_king": 110.0, "short_king": 60.0}})
+
+
+def test_gamma_king_gate_missing_data_fails():
+    assert hst.gamma_king_gate({"last": 100.0, "gamma": None})
+    assert hst.gamma_king_gate({"last": 100.0, "gamma": {"long_king": 110.0, "short_king": None}})
